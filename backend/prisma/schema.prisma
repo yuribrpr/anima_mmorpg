@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum PowerLevel {
+  ROOKIE
+  CHAMPION
+  ULTIMATE
+  MEGA
+  BURST_MODE
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  username      String         @unique
+  passwordHash  String
+  adoptedAnimas AdoptedAnima[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model Anima {
+  id                 String    @id @default(cuid())
+  name               String
+  attack             Int
+  attackSpeedSeconds Float
+  critChance         Float
+  agility            Int
+  defense            Int
+  maxHp              Int
+  imageData          String?   @db.LongText
+  powerLevel         PowerLevel
+  nextEvolutionId    String?
+  nextEvolution      Anima?    @relation("AnimaEvolution", fields: [nextEvolutionId], references: [id], onDelete: SetNull)
+  previousEvolutions Anima[]   @relation("AnimaEvolution")
+  adoptedBy          AdoptedAnima[]
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([name])
+  @@index([powerLevel])
+}
+
+model AdoptedAnima {
+  id                   String    @id @default(cuid())
+  userId               String
+  baseAnimaId          String
+  nickname             String
+  level                Int       @default(1)
+  experience           Int       @default(0)
+  experienceMax        Int       @default(1000)
+  currentHp            Int
+  bonusAttack          Int       @default(0)
+  bonusDefense         Int       @default(0)
+  bonusMaxHp           Int       @default(0)
+  attackSpeedReduction Float     @default(0)
+  critChanceBonus      Float     @default(0)
+  isPrimary            Boolean   @default(false)
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  baseAnima            Anima     @relation(fields: [baseAnimaId], references: [id], onDelete: Restrict)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([baseAnimaId])
+  @@index([userId, isPrimary])
+}
+
+model BestiaryAnima {
+  id                 String     @id @default(cuid())
+  name               String
+  attack             Int
+  attackSpeedSeconds Float
+  critChance         Float
+  agility            Int
+  defense            Int
+  maxHp              Int
+  imageData          String?    @db.LongText
+  powerLevel         PowerLevel
+  bitsDrop           Int
+  xpDrop             Int
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  @@index([name])
+  @@index([powerLevel])
+}
