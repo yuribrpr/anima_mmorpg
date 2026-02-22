@@ -15,18 +15,18 @@ const ProgressBar = ({ value, max, colorClass }: { value: number; max: number; c
   const percent = Math.max(0, Math.min(100, (value / Math.max(max, 1)) * 100));
 
   return (
-    <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800/80">
+    <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
       <div className={`h-full rounded-full transition-all ${colorClass}`} style={{ width: `${percent}%` }} />
     </div>
   );
 };
 
 const StatRow = ({ label, base, bonus, total }: { label: string; base: string | number; bonus: string | number; total: string | number }) => (
-  <div className="grid grid-cols-4 gap-2 rounded border border-amber-600/20 bg-black/25 p-2 text-xs">
-    <span className="text-amber-100/85">{label}</span>
-    <span className="text-slate-300">{base}</span>
-    <span className="text-emerald-300">+{bonus}</span>
-    <span className="text-amber-200 font-semibold">{total}</span>
+  <div className="grid grid-cols-4 gap-2 rounded-md border bg-muted/30 p-2 text-xs">
+    <span className="text-muted-foreground">{label}</span>
+    <span>{base}</span>
+    <span className="text-emerald-600">+{bonus}</span>
+    <span className="font-semibold">{total}</span>
   </div>
 );
 
@@ -78,79 +78,73 @@ export const InventarioPage = () => {
 
   return (
     <section className="space-y-6">
-      <header className="rounded-xl border border-amber-700/35 bg-[radial-gradient(circle_at_30%_20%,_rgba(245,158,11,0.16),_rgba(2,6,23,0.95))] p-6 shadow-[0_0_48px_rgba(245,158,11,0.15)]">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-xs uppercase tracking-[0.22em] text-amber-300">Inventario Arcano</p>
-          {primary ? (
-            <Badge className="bg-amber-500/25 text-amber-100 hover:bg-amber-500/25">
-              <Crown className="mr-1 h-3.5 w-3.5" />
-              Principal: {primary.nickname}
-            </Badge>
-          ) : null}
-        </div>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-amber-50">Seus Animas adotados</h1>
-        <p className="mt-2 text-sm text-amber-100/80">Abra os detalhes para ver base da biblioteca, bonus e atributos finais de batalha.</p>
-      </header>
+      <Card>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Inventario de Animas</p>
+            {primary ? (
+              <Badge variant="secondary">
+                <Crown className="mr-1 h-3.5 w-3.5" />
+                Principal: {primary.nickname}
+              </Badge>
+            ) : null}
+          </div>
+          <CardTitle className="text-3xl tracking-tight">Seus Animas adotados</CardTitle>
+          <CardDescription>Abra os detalhes para ver base da biblioteca, bonus e atributos finais de batalha.</CardDescription>
+        </CardHeader>
+      </Card>
 
-      {errorMessage ? <p className="text-sm text-red-400">{errorMessage}</p> : null}
+      {errorMessage ? <p className="text-sm text-red-500">{errorMessage}</p> : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {!loading && animas.length === 0 ? (
           <Card className="md:col-span-2 xl:col-span-3">
             <CardHeader>
               <CardTitle>Nenhum anima adotado</CardTitle>
-              <CardDescription>Vá para a tela de adocao para registrar seu primeiro companheiro.</CardDescription>
+              <CardDescription>Va para a tela de adocao para registrar seu primeiro companheiro.</CardDescription>
             </CardHeader>
           </Card>
         ) : null}
 
         {animas.map((anima) => (
-          <Card
-            key={anima.id}
-            className="cursor-pointer border-amber-600/25 bg-[linear-gradient(145deg,rgba(120,53,15,0.25),rgba(15,23,42,0.92))] transition hover:border-amber-400/50"
-            onClick={() => setSelected(anima)}
-          >
+          <Card key={anima.id} className="cursor-pointer transition-shadow hover:shadow-sm" onClick={() => setSelected(anima)}>
             <CardHeader>
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <CardTitle className="text-amber-50">{anima.nickname}</CardTitle>
-                  <CardDescription className="text-amber-200/75">{anima.baseAnima.name}</CardDescription>
+                  <CardTitle>{anima.nickname}</CardTitle>
+                  <CardDescription>{anima.baseAnima.name}</CardDescription>
                 </div>
-                {anima.isPrimary ? (
-                  <Badge className="bg-amber-500/25 text-amber-100 hover:bg-amber-500/25">Principal</Badge>
-                ) : (
-                  <Badge variant="secondary">Reserva</Badge>
-                )}
+                {anima.isPrimary ? <Badge>Principal</Badge> : <Badge variant="secondary">Reserva</Badge>}
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
               {anima.baseAnima.imageData ? (
-                <img src={anima.baseAnima.imageData} alt={anima.baseAnima.name} className="h-40 w-full rounded-md border border-amber-500/20 object-cover" />
+                <img src={anima.baseAnima.imageData} alt={anima.baseAnima.name} className="h-40 w-full rounded-md border object-cover" />
               ) : (
-                <div className="h-40 w-full rounded-md border border-amber-500/20 bg-slate-900/80" />
+                <div className="h-40 w-full rounded-md border bg-muted/30" />
               )}
 
-              <div className="space-y-2 text-xs text-amber-100/90">
+              <div className="space-y-2 text-xs">
                 <p>Nivel {anima.level}</p>
-                <ProgressBar value={anima.experience} max={anima.experienceMax} colorClass="bg-violet-400" />
-                <p>
+                <ProgressBar value={anima.experience} max={anima.experienceMax} colorClass="bg-primary" />
+                <p className="text-muted-foreground">
                   EXP {anima.experience}/{anima.experienceMax}
                 </p>
-                <ProgressBar value={anima.currentHp} max={anima.totalMaxHp} colorClass="bg-emerald-400" />
-                <p>
+                <ProgressBar value={anima.currentHp} max={anima.totalMaxHp} colorClass="bg-emerald-500" />
+                <p className="text-muted-foreground">
                   HP {anima.currentHp}/{anima.totalMaxHp}
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 text-xs text-amber-100">
-                <div className="rounded border border-amber-500/25 bg-black/20 p-2">ATK {anima.totalAttack}</div>
-                <div className="rounded border border-amber-500/25 bg-black/20 p-2">DEF {anima.totalDefense}</div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-md border bg-muted/30 p-2">ATK {anima.totalAttack}</div>
+                <div className="rounded-md border bg-muted/30 p-2">DEF {anima.totalDefense}</div>
               </div>
 
               {!anima.isPrimary ? (
                 <Button
                   variant="outline"
-                  className="w-full border-amber-500/45 text-amber-100 hover:bg-amber-500/10"
+                  className="w-full"
                   onClick={(event) => {
                     event.stopPropagation();
                     void handleSetPrimary(anima.id);
@@ -166,40 +160,38 @@ export const InventarioPage = () => {
       </div>
 
       <Dialog open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(null)}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-amber-600/35 bg-[linear-gradient(160deg,rgba(28,25,23,0.98),rgba(15,23,42,0.98))]">
+        <DialogContent className="max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-amber-50">{selected?.nickname}</DialogTitle>
-            <DialogDescription className="text-amber-200/80">
-              Detalhes completos do Anima adotado e referencia da biblioteca.
-            </DialogDescription>
+            <DialogTitle>{selected?.nickname}</DialogTitle>
+            <DialogDescription>Detalhes completos do Anima adotado e referencia da biblioteca.</DialogDescription>
           </DialogHeader>
 
           {selected ? (
             <div className="space-y-4">
               <div className="grid gap-4 md:grid-cols-[180px_1fr]">
                 {selected.baseAnima.imageData ? (
-                  <img src={selected.baseAnima.imageData} alt={selected.baseAnima.name} className="h-44 w-full rounded-md border border-amber-500/20 object-cover" />
+                  <img src={selected.baseAnima.imageData} alt={selected.baseAnima.name} className="h-44 w-full rounded-md border object-cover" />
                 ) : (
-                  <div className="h-44 w-full rounded-md border border-amber-500/20 bg-slate-900/80" />
+                  <div className="h-44 w-full rounded-md border bg-muted/30" />
                 )}
 
-                <div className="rounded border border-amber-600/20 bg-black/20 p-3 text-sm text-amber-100">
+                <div className="rounded-md border bg-muted/30 p-3 text-sm">
                   <p className="font-medium">
                     {selected.baseAnima.name} ({selected.baseAnima.powerLevel})
                   </p>
-                  <p className="mt-1 text-amber-200/80">Nivel {selected.level}</p>
+                  <p className="mt-1 text-muted-foreground">Nivel {selected.level}</p>
                   <div className="mt-4 space-y-2">
                     <div>
-                      <p className="mb-1 text-xs text-amber-300/85">Vida</p>
-                      <ProgressBar value={selected.currentHp} max={selected.totalMaxHp} colorClass="bg-emerald-400" />
-                      <p className="mt-1 text-xs">
+                      <p className="mb-1 text-xs text-muted-foreground">Vida</p>
+                      <ProgressBar value={selected.currentHp} max={selected.totalMaxHp} colorClass="bg-emerald-500" />
+                      <p className="mt-1 text-xs text-muted-foreground">
                         {selected.currentHp}/{selected.totalMaxHp}
                       </p>
                     </div>
                     <div>
-                      <p className="mb-1 text-xs text-amber-300/85">Experiencia</p>
-                      <ProgressBar value={selected.experience} max={selected.experienceMax} colorClass="bg-fuchsia-400" />
-                      <p className="mt-1 text-xs">
+                      <p className="mb-1 text-xs text-muted-foreground">Experiencia</p>
+                      <ProgressBar value={selected.experience} max={selected.experienceMax} colorClass="bg-primary" />
+                      <p className="mt-1 text-xs text-muted-foreground">
                         {selected.experience}/{selected.experienceMax}
                       </p>
                     </div>
@@ -207,10 +199,10 @@ export const InventarioPage = () => {
                 </div>
               </div>
 
-              <Card className="border-amber-600/20 bg-black/20">
+              <Card>
                 <CardHeader>
-                  <CardTitle className="text-sm text-amber-100">Atributos RPG</CardTitle>
-                  <CardDescription className="text-amber-200/70">Base da biblioteca + bonus da adocao = total em combate</CardDescription>
+                  <CardTitle className="text-sm">Atributos RPG</CardTitle>
+                  <CardDescription>Base da biblioteca + bonus da adocao = total em combate</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   <StatRow label="Ataque" base={selected.baseAnima.attack} bonus={selected.bonusAttack} total={selected.totalAttack} />
@@ -231,21 +223,21 @@ export const InventarioPage = () => {
                 </CardContent>
               </Card>
 
-              <div className="grid gap-2 md:grid-cols-3 text-xs">
-                <div className="rounded border border-amber-500/20 bg-black/20 p-3 text-amber-100">
-                  <Sword className="mb-2 h-4 w-4 text-amber-300" />
+              <div className="grid gap-2 md:grid-cols-4 text-xs">
+                <div className="rounded-md border bg-muted/30 p-3">
+                  <Sword className="mb-2 h-4 w-4 text-muted-foreground" />
                   Ataque final: <strong>{selected.totalAttack}</strong>
                 </div>
-                <div className="rounded border border-amber-500/20 bg-black/20 p-3 text-amber-100">
-                  <Shield className="mb-2 h-4 w-4 text-amber-300" />
+                <div className="rounded-md border bg-muted/30 p-3">
+                  <Shield className="mb-2 h-4 w-4 text-muted-foreground" />
                   Defesa final: <strong>{selected.totalDefense}</strong>
                 </div>
-                <div className="rounded border border-amber-500/20 bg-black/20 p-3 text-amber-100">
-                  <Timer className="mb-2 h-4 w-4 text-amber-300" />
+                <div className="rounded-md border bg-muted/30 p-3">
+                  <Timer className="mb-2 h-4 w-4 text-muted-foreground" />
                   Velocidade final: <strong>{formatSeconds(selected.totalAttackSpeedSeconds)}</strong>
                 </div>
-                <div className="rounded border border-amber-500/20 bg-black/20 p-3 text-amber-100">
-                  <Sparkles className="mb-2 h-4 w-4 text-amber-300" />
+                <div className="rounded-md border bg-muted/30 p-3">
+                  <Sparkles className="mb-2 h-4 w-4 text-muted-foreground" />
                   Critico final: <strong>{formatPercent(selected.totalCritChance)}</strong>
                 </div>
               </div>
