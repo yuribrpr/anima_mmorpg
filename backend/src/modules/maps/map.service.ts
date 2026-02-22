@@ -25,6 +25,7 @@ const toMapOutput = (map: MapEntity): GameMapOutput => ({
   tilePalette: map.tilePalette,
   tileLayer: map.tileLayer,
   collisionLayer: map.collisionLayer,
+  enemySpawns: map.enemySpawns,
   spawnX: map.spawnX,
   spawnY: map.spawnY,
   isActive: map.isActive,

@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Brush, Eraser, Hand, MapPinned, Minus, Plus, Target, Upload, ZoomIn } from "lucide-react";
 import { ApiError } from "@/lib/api";
+import { listBestiaryAnimas } from "@/lib/bestiario";
 import { activateMap, createMap, getMapById, listMaps, saveMapAssets, saveMapLayout } from "@/lib/mapas";
 import { GRID_COLS, GRID_ROWS, RENDER_BASE_HEIGHT, TILE_SIZE, WORLD_HEIGHT, WORLD_WIDTH } from "@/lib/map-grid";
 import type { GameMap } from "@/types/mapa";
+import type { BestiaryAnima } from "@/types/bestiary-anima";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-type EditorTab = "mapa_base" | "colisoes";
+type EditorTab = "mapa_base" | "colisoes" | "inimigos";
 type EditorTool = "navigate" | "add" | "erase";
+type EnemyAreaMode = "spawn" | "movement";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -24,9 +27,29 @@ const fileToDataUrl = async (file: File) =>
   });
 
 const cloneMatrix = <T,>(matrix: T[][]) => matrix.map((row) => [...row]);
+const createEmptyBooleanLayer = () => Array.from({ length: GRID_ROWS }, () => Array.from({ length: GRID_COLS }, () => false));
+const generateEnemySpawnId = () =>
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `enemy_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+
+const getEnemyColor = (seed: string) => {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash << 5) - hash + seed.charCodeAt(index);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return {
+    fill: `hsla(${hue}, 70%, 52%, 0.24)`,
+    stroke: `hsla(${hue}, 88%, 65%, 0.85)`,
+    subtle: `hsla(${hue}, 70%, 52%, 0.12)`,
+  };
+};
 
 export const AdminMapasPage = () => {
   const [maps, setMaps] = useState<GameMap[]>([]);
+  const [bestiaryAnimas, setBestiaryAnimas] = useState<BestiaryAnima[]>([]);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
   const [mapDraft, setMapDraft] = useState<GameMap | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,6 +61,9 @@ export const AdminMapasPage = () => {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [placingSpawn, setPlacingSpawn] = useState(false);
   const [isCanvasFocused, setIsCanvasFocused] = useState(false);
+  const [selectedEnemySpawnId, setSelectedEnemySpawnId] = useState<string | null>(null);
+  const [newEnemyBestiaryId, setNewEnemyBestiaryId] = useState<string>("");
+  const [enemyAreaMode, setEnemyAreaMode] = useState<EnemyAreaMode>("spawn");
 
   const [layoutDirty, setLayoutDirty] = useState(false);
   const [assetsDirty, setAssetsDirty] = useState(false);
@@ -79,8 +105,10 @@ export const AdminMapasPage = () => {
     const load = async () => {
       setLoading(true);
       try {
-        await refreshMaps();
+        const [, bestiary] = await Promise.all([refreshMaps(), listBestiaryAnimas()]);
         if (!mounted) return;
+        setBestiaryAnimas(bestiary);
+        setNewEnemyBestiaryId((current) => current || bestiary[0]?.id || "");
         setErrorMessage(null);
       } catch (error) {
         if (!mounted) return;
@@ -110,6 +138,12 @@ export const AdminMapasPage = () => {
         const map = await getMapById(selectedMapId);
         if (!mounted) return;
         setMapDraft(map);
+        setSelectedEnemySpawnId((current) => {
+          if (current && map.enemySpawns.some((item) => item.id === current)) {
+            return current;
+          }
+          return map.enemySpawns[0]?.id ?? null;
+        });
         setLayoutDirty(false);
         setAssetsDirty(false);
         setSaveStatus("idle");
@@ -160,6 +194,7 @@ export const AdminMapasPage = () => {
           await saveMapLayout(mapDraft.id, {
             tileLayer: mapDraft.tileLayer,
             collisionLayer: mapDraft.collisionLayer,
+            enemySpawns: mapDraft.enemySpawns,
             spawnX: mapDraft.spawnX,
             spawnY: mapDraft.spawnY,
             backgroundScale: mapDraft.backgroundScale,
@@ -258,6 +293,66 @@ export const AdminMapasPage = () => {
     if (markAssets) setAssetsDirty(true);
   };
 
+  const selectedEnemySpawn = useMemo(
+    () => mapDraft?.enemySpawns.find((item) => item.id === selectedEnemySpawnId) ?? null,
+    [mapDraft?.enemySpawns, selectedEnemySpawnId],
+  );
+
+  const handleAddEnemySpawn = () => {
+    if (!mapDraft || !newEnemyBestiaryId) {
+      return;
+    }
+
+    const bestiary = bestiaryAnimas.find((item) => item.id === newEnemyBestiaryId);
+    if (!bestiary) {
+      return;
+    }
+
+    const nextConfig = {
+      id: generateEnemySpawnId(),
+      bestiaryAnimaId: bestiary.id,
+      spawnCount: 3,
+      respawnSeconds: 15,
+      spawnArea: createEmptyBooleanLayer(),
+      movementArea: createEmptyBooleanLayer(),
+    };
+
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        enemySpawns: [...current.enemySpawns, nextConfig],
+      }),
+      true,
+    );
+    setSelectedEnemySpawnId(nextConfig.id);
+    setTool("add");
+  };
+
+  const handleRemoveEnemySpawn = (id: string) => {
+    const remaining = (mapDraft?.enemySpawns ?? []).filter((item) => item.id !== id);
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        enemySpawns: current.enemySpawns.filter((item) => item.id !== id),
+      }),
+      true,
+    );
+    setSelectedEnemySpawnId((current) => (current === id ? remaining[0]?.id ?? null : current));
+  };
+
+  const updateEnemySpawnConfig = (
+    id: string,
+    updater: (config: NonNullable<typeof selectedEnemySpawn>) => NonNullable<typeof selectedEnemySpawn>,
+  ) => {
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        enemySpawns: current.enemySpawns.map((item) => (item.id === id ? updater(item) : item)),
+      }),
+      true,
+    );
+  };
+
   const worldTileFromPointer = (event: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current;
     if (!canvas || !mapDraft) return null;
@@ -275,27 +370,52 @@ export const AdminMapasPage = () => {
   const applyBrush = (center: { x: number; y: number }) => {
     if (!mapDraft) return;
     if (tool === "navigate") return;
-    if (tab !== "colisoes") return;
-
     const half = Math.floor(brushSize / 2);
-    updateMapDraft(
-      (current) => {
-        const next = { ...current };
-        const matrix = cloneMatrix(current.collisionLayer);
-        for (let dy = -half; dy <= half; dy += 1) {
-          for (let dx = -half; dx <= half; dx += 1) {
-            const x = center.x + dx;
-            const y = center.y + dy;
-            if (x < 0 || x >= current.cols || y < 0 || y >= current.rows) continue;
-            matrix[y][x] = tool === "add";
-          }
-        }
 
-        next.collisionLayer = matrix;
-        return next;
-      },
-      true,
-    );
+    if (tab === "colisoes") {
+      updateMapDraft(
+        (current) => {
+          const next = { ...current };
+          const matrix = cloneMatrix(current.collisionLayer);
+          for (let dy = -half; dy <= half; dy += 1) {
+            for (let dx = -half; dx <= half; dx += 1) {
+              const x = center.x + dx;
+              const y = center.y + dy;
+              if (x < 0 || x >= current.cols || y < 0 || y >= current.rows) continue;
+              matrix[y][x] = tool === "add";
+            }
+          }
+          next.collisionLayer = matrix;
+          return next;
+        },
+        true,
+      );
+      return;
+    }
+
+    if (tab !== "inimigos" || !selectedEnemySpawnId) {
+      return;
+    }
+
+    updateEnemySpawnConfig(selectedEnemySpawnId, (config) => {
+      const nextSpawnArea = cloneMatrix(config.spawnArea);
+      const nextMovementArea = cloneMatrix(config.movementArea);
+      const layer = enemyAreaMode === "spawn" ? nextSpawnArea : nextMovementArea;
+      for (let dy = -half; dy <= half; dy += 1) {
+        for (let dx = -half; dx <= half; dx += 1) {
+          const x = center.x + dx;
+          const y = center.y + dy;
+          if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) continue;
+          layer[y][x] = tool === "add";
+        }
+      }
+
+      return {
+        ...config,
+        spawnArea: nextSpawnArea,
+        movementArea: nextMovementArea,
+      };
+    });
   };
 
   const zoomTo = (nextZoom: number, anchorX?: number, anchorY?: number) => {
@@ -371,6 +491,40 @@ export const AdminMapasPage = () => {
         }
       }
 
+      if (tab === "inimigos") {
+        for (const enemy of map.enemySpawns) {
+          const colors = getEnemyColor(enemy.id);
+          const isSelected = enemy.id === selectedEnemySpawnId;
+
+          context.fillStyle = isSelected ? "rgba(56, 189, 248, 0.16)" : "rgba(56, 189, 248, 0.08)";
+          for (let y = 0; y < map.rows; y += 1) {
+            for (let x = 0; x < map.cols; x += 1) {
+              if (!enemy.movementArea[y]?.[x]) continue;
+              context.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            }
+          }
+
+          context.fillStyle = isSelected ? colors.fill : colors.subtle;
+          for (let y = 0; y < map.rows; y += 1) {
+            for (let x = 0; x < map.cols; x += 1) {
+              if (!enemy.spawnArea[y]?.[x]) continue;
+              context.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            }
+          }
+
+          if (isSelected) {
+            context.strokeStyle = colors.stroke;
+            context.lineWidth = 1;
+            for (let y = 0; y < map.rows; y += 1) {
+              for (let x = 0; x < map.cols; x += 1) {
+                if (!enemy.spawnArea[y]?.[x]) continue;
+                context.strokeRect(x * TILE_SIZE + 0.5, y * TILE_SIZE + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+              }
+            }
+          }
+        }
+      }
+
       context.strokeStyle = "rgba(255,255,255,0.15)";
       context.lineWidth = 1;
       for (let x = 0; x <= GRID_COLS; x += 1) {
@@ -404,6 +558,26 @@ export const AdminMapasPage = () => {
         }
       }
 
+      if (tab === "inimigos" && hoverTileRef.current && tool !== "navigate" && selectedEnemySpawnId) {
+        const half = Math.floor(brushSize / 2);
+        const selectedColors = getEnemyColor(selectedEnemySpawnId);
+        context.fillStyle =
+          tool === "erase"
+            ? "rgba(239, 68, 68, 0.25)"
+            : enemyAreaMode === "spawn"
+              ? selectedColors.fill
+              : "rgba(56, 189, 248, 0.22)";
+
+        for (let dy = -half; dy <= half; dy += 1) {
+          for (let dx = -half; dx <= half; dx += 1) {
+            const x = hoverTileRef.current.x + dx;
+            const y = hoverTileRef.current.y + dy;
+            if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) continue;
+            context.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+
       context.restore();
       frame = requestAnimationFrame(draw);
     };
@@ -412,7 +586,7 @@ export const AdminMapasPage = () => {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [brushSize, mapDraft, tab, tool]);
+  }, [brushSize, enemyAreaMode, mapDraft, selectedEnemySpawnId, tab, tool]);
 
   const handleCreateMap = async () => {
     if (newMapName.trim().length < 2) return;
@@ -524,6 +698,9 @@ export const AdminMapasPage = () => {
             <Button variant={tab === "colisoes" ? "default" : "outline"} onClick={() => setTab("colisoes")}>
               Colisoes
             </Button>
+            <Button variant={tab === "inimigos" ? "default" : "outline"} onClick={() => setTab("inimigos")}>
+              Inimigos
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -537,6 +714,21 @@ export const AdminMapasPage = () => {
               </Button>
               <Button variant={tool === "erase" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("erase")}>
                 <Eraser className="h-4 w-4" /> 3 Apagar bloqueio
+              </Button>
+              <Badge variant="secondary">ESC volta para navegar</Badge>
+            </div>
+          ) : null}
+
+          {tab === "inimigos" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant={tool === "navigate" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("navigate")}>
+                <Hand className="h-4 w-4" /> 1 Navegar
+              </Button>
+              <Button variant={tool === "add" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("add")}>
+                <Brush className="h-4 w-4" /> 2 Desenhar area
+              </Button>
+              <Button variant={tool === "erase" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("erase")}>
+                <Eraser className="h-4 w-4" /> 3 Apagar area
               </Button>
               <Badge variant="secondary">ESC volta para navegar</Badge>
             </div>
@@ -571,7 +763,9 @@ export const AdminMapasPage = () => {
                   <p className="mb-1 font-medium text-foreground">Mapa Base</p>
                   <p>Ajuste apenas a imagem (upload e escala), mantendo a grade fixa.</p>
                 </div>
-              ) : (
+              ) : null}
+
+              {tab === "colisoes" ? (
                 <>
                   <label className="block text-sm">
                     Tamanho do pincel
@@ -599,7 +793,142 @@ export const AdminMapasPage = () => {
                     </p>
                   </div>
                 </>
-              )}
+              ) : null}
+
+              {tab === "inimigos" ? (
+                <div className="space-y-4">
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <p className="text-sm font-medium">Adicionar inimigo</p>
+                    <select
+                      className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                      value={newEnemyBestiaryId}
+                      onChange={(event) => setNewEnemyBestiaryId(event.target.value)}
+                    >
+                      <option value="">Selecione no bestiario</option>
+                      {bestiaryAnimas.map((anima) => (
+                        <option key={anima.id} value={anima.id}>
+                          {anima.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button className="w-full" onClick={handleAddEnemySpawn} disabled={!newEnemyBestiaryId}>
+                      Adicionar no mapa
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <p className="text-sm font-medium">Grupos no mapa</p>
+                    <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                      {mapDraft?.enemySpawns.length ? (
+                        mapDraft.enemySpawns.map((group) => {
+                          const bestiary = bestiaryAnimas.find((item) => item.id === group.bestiaryAnimaId);
+                          return (
+                            <div
+                              key={group.id}
+                              className={`rounded-md border p-2 ${selectedEnemySpawnId === group.id ? "border-primary bg-primary/10" : "border-border"}`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  className="text-left text-sm font-medium"
+                                  onClick={() => setSelectedEnemySpawnId(group.id)}
+                                >
+                                  {bestiary?.name ?? "Inimigo removido"}
+                                </button>
+                                <Button type="button" variant="ghost" size="sm" onClick={() => handleRemoveEnemySpawn(group.id)}>
+                                  Remover
+                                </Button>
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Spawn {group.spawnCount} | Respawn {group.respawnSeconds}s
+                              </p>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Nenhum grupo configurado.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedEnemySpawn ? (
+                    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+                      <p className="text-sm font-medium">Configuracao do grupo</p>
+                      <label className="block text-sm">
+                        Quantidade de inimigos
+                        <Input
+                          type="number"
+                          min={1}
+                          max={500}
+                          step={1}
+                          value={selectedEnemySpawn.spawnCount}
+                          onChange={(event) => {
+                            const next = clamp(Math.floor(Number(event.target.value) || 1), 1, 500);
+                            updateEnemySpawnConfig(selectedEnemySpawn.id, (config) => ({ ...config, spawnCount: next }));
+                          }}
+                        />
+                      </label>
+
+                      <label className="block text-sm">
+                        Tempo de respawn (segundos)
+                        <Input
+                          type="number"
+                          min={0.5}
+                          max={3600}
+                          step={0.5}
+                          value={selectedEnemySpawn.respawnSeconds}
+                          onChange={(event) => {
+                            const parsed = Number(event.target.value);
+                            const next = clamp(Number.isFinite(parsed) ? parsed : 15, 0.5, 3600);
+                            updateEnemySpawnConfig(selectedEnemySpawn.id, (config) => ({
+                              ...config,
+                              respawnSeconds: Number(next.toFixed(1)),
+                            }));
+                          }}
+                        />
+                      </label>
+
+                      <div className="space-y-2">
+                        <p className="text-xs uppercase text-muted-foreground">Area que o pincel edita</p>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={enemyAreaMode === "spawn" ? "default" : "outline"}
+                            onClick={() => setEnemyAreaMode("spawn")}
+                          >
+                            Area de Spawn
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={enemyAreaMode === "movement" ? "default" : "outline"}
+                            onClick={() => setEnemyAreaMode("movement")}
+                          >
+                            Area de Movimentacao
+                          </Button>
+                        </div>
+                      </div>
+
+                      <label className="block text-sm">
+                        Tamanho do pincel
+                        <Input
+                          type="number"
+                          min={1}
+                          max={5}
+                          step={1}
+                          value={brushSize}
+                          onChange={(event) => setBrushSize(clamp(Number(event.target.value) || 1, 1, 5))}
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                      <p>Selecione ou adicione um grupo de inimigos para desenhar as areas.</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
 
               <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
                 <p className="mb-2 font-medium text-foreground">Pan/Zoom</p>
@@ -657,7 +986,8 @@ export const AdminMapasPage = () => {
                     return;
                   }
 
-                  if (tab !== "colisoes" || !tile) return;
+                  if (!tile || tab === "mapa_base") return;
+                  if (tab === "inimigos" && !selectedEnemySpawnId) return;
                   paintRef.current = true;
                   applyBrush(tile);
                 }}
@@ -670,7 +1000,7 @@ export const AdminMapasPage = () => {
                     panRef.current.y = dragRef.current.panY + (event.clientY - dragRef.current.startY);
                   }
 
-                  if (paintRef.current && tile && tab === "colisoes") {
+                  if (paintRef.current && tile && tab !== "mapa_base") {
                     applyBrush(tile);
                   }
                 }}

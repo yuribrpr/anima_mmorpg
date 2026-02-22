@@ -4,6 +4,17 @@ export type MapTileAsset = {
   imageData: string;
 };
 
+export type EnemyAreaLayer = boolean[][];
+
+export type MapEnemySpawnConfig = {
+  id: string;
+  bestiaryAnimaId: string;
+  spawnCount: number;
+  respawnSeconds: number;
+  spawnArea: EnemyAreaLayer;
+  movementArea: EnemyAreaLayer;
+};
+
 export type GameMapOutput = {
   id: string;
   name: string;
@@ -17,6 +28,7 @@ export type GameMapOutput = {
   tilePalette: MapTileAsset[];
   tileLayer: (number | null)[][];
   collisionLayer: boolean[][];
+  enemySpawns: MapEnemySpawnConfig[];
   spawnX: number;
   spawnY: number;
   isActive: boolean;
@@ -53,6 +65,7 @@ export type UpdateActiveMapStateInput = {
 export type UpdateMapLayoutInput = {
   tileLayer: (number | null)[][];
   collisionLayer: boolean[][];
+  enemySpawns: MapEnemySpawnConfig[];
   spawnX: number;
   spawnY: number;
   backgroundScale: number;

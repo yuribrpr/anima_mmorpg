@@ -1,0 +1,2 @@
+ALTER TABLE `GameMap`
+ADD COLUMN `enemySpawns` JSON NULL;

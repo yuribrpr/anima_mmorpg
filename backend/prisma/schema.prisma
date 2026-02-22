@@ -45,6 +45,7 @@ model GameMap {
   tilePalette         Json
   tileLayer           Json
   collisionLayer      Json
+  enemySpawns         Json?
   spawnX              Int              @default(0)
   spawnY              Int              @default(0)
   isActive            Boolean          @default(false)

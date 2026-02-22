@@ -1,12 +1,13 @@
 import { GameMap, PlayerMapState, Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
-import { MapTileAsset, UpdateActiveMapStateInput, UpdateMapAssetsInput, UpdateMapLayoutInput } from "../../types/map";
+import { MapEnemySpawnConfig, MapTileAsset, UpdateActiveMapStateInput, UpdateMapAssetsInput, UpdateMapLayoutInput } from "../../types/map";
 import { MAP_CELL_SIZE, MAP_COLS, MAP_DEFAULT_SCALE, MAP_ROWS, MAP_WORLD_HEIGHT, MAP_WORLD_WIDTH } from "./map.constants";
 
-type MapEntity = Omit<GameMap, "tilePalette" | "tileLayer" | "collisionLayer"> & {
+type MapEntity = Omit<GameMap, "tilePalette" | "tileLayer" | "collisionLayer" | "enemySpawns"> & {
   tilePalette: MapTileAsset[];
   tileLayer: (number | null)[][];
   collisionLayer: boolean[][];
+  enemySpawns: MapEnemySpawnConfig[];
 };
 
 type PlayerMapStateEntity = PlayerMapState;
@@ -75,11 +76,58 @@ const normalizeCollisionLayer = (value: Prisma.JsonValue): boolean[][] => {
   });
 };
 
+const normalizeEnemyAreaLayer = (value: unknown): boolean[][] => {
+  if (!Array.isArray(value)) {
+    return createEmptyCollisionLayer();
+  }
+
+  return Array.from({ length: MAP_ROWS }, (_, rowIndex) => {
+    const row = value[rowIndex];
+    if (!Array.isArray(row)) {
+      return Array.from({ length: MAP_COLS }, () => false);
+    }
+
+    return Array.from({ length: MAP_COLS }, (_, colIndex) => row[colIndex] === true);
+  });
+};
+
+const normalizeEnemySpawns = (value: Prisma.JsonValue | null | undefined): MapEnemySpawnConfig[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const output: MapEnemySpawnConfig[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const data = item as Record<string, unknown>;
+    if (typeof data.id !== "string" || typeof data.bestiaryAnimaId !== "string") {
+      continue;
+    }
+
+    const spawnCount = typeof data.spawnCount === "number" && Number.isInteger(data.spawnCount) ? data.spawnCount : 1;
+    const respawnSeconds = typeof data.respawnSeconds === "number" ? data.respawnSeconds : 15;
+    output.push({
+      id: data.id,
+      bestiaryAnimaId: data.bestiaryAnimaId,
+      spawnCount: Math.max(1, spawnCount),
+      respawnSeconds: Math.max(0.5, respawnSeconds),
+      spawnArea: normalizeEnemyAreaLayer(data.spawnArea),
+      movementArea: normalizeEnemyAreaLayer(data.movementArea),
+    });
+  }
+
+  return output;
+};
+
 const toEntity = (map: GameMap): MapEntity => ({
   ...map,
   tilePalette: normalizeTilePalette(map.tilePalette),
   tileLayer: normalizeTileLayer(map.tileLayer),
   collisionLayer: normalizeCollisionLayer(map.collisionLayer),
+  enemySpawns: normalizeEnemySpawns(map.enemySpawns),
 });
 
 const defaultMapCreateData = (name: string, isActive: boolean) => ({
@@ -94,6 +142,7 @@ const defaultMapCreateData = (name: string, isActive: boolean) => ({
   tilePalette: [],
   tileLayer: createEmptyTileLayer(),
   collisionLayer: createEmptyCollisionLayer(),
+  enemySpawns: [],
   spawnX: Math.floor(MAP_COLS / 2),
   spawnY: Math.floor(MAP_ROWS / 2),
   isActive,
@@ -158,6 +207,7 @@ export class PrismaMapRepository implements MapRepository {
       data: {
         tileLayer: input.tileLayer,
         collisionLayer: input.collisionLayer,
+        enemySpawns: input.enemySpawns,
         spawnX: input.spawnX,
         spawnY: input.spawnY,
         backgroundScale: input.backgroundScale,

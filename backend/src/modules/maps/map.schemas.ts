@@ -6,6 +6,16 @@ const collisionCellSchema = z.boolean();
 
 const tileLayerSchema = z.array(z.array(tileCellSchema).length(MAP_COLS)).length(MAP_ROWS);
 const collisionLayerSchema = z.array(z.array(collisionCellSchema).length(MAP_COLS)).length(MAP_ROWS);
+const enemyAreaLayerSchema = collisionLayerSchema;
+
+const mapEnemySpawnSchema = z.object({
+  id: z.string().min(1).max(120),
+  bestiaryAnimaId: z.string().min(1),
+  spawnCount: z.number().int().min(1).max(500),
+  respawnSeconds: z.number().min(0.5).max(3600),
+  spawnArea: enemyAreaLayerSchema,
+  movementArea: enemyAreaLayerSchema,
+});
 
 export const mapIdParamsSchema = z.object({
   id: z.string().min(1),
@@ -25,6 +35,7 @@ export const updateActiveMapStateSchema = z.object({
 export const updateMapLayoutSchema = z.object({
   tileLayer: tileLayerSchema,
   collisionLayer: collisionLayerSchema,
+  enemySpawns: z.array(mapEnemySpawnSchema).max(100).default([]),
   spawnX: z.number().int().min(0).max(MAP_COLS - 1),
   spawnY: z.number().int().min(0).max(MAP_ROWS - 1),
   backgroundScale: z.number().min(0.1).max(5),
