@@ -13,6 +13,7 @@ export const createMapRouter = (mapRepository: MapRepository) => {
   router.use(authMiddleware);
   router.get("/ativo", mapController.getActive);
   router.patch("/ativo/estado", mapController.updateActiveState);
+  router.post("/teleportar", mapController.usePortal);
 
   router.use(adminMiddleware);
   router.get("/", mapController.list);

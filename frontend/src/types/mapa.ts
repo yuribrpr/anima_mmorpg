@@ -9,10 +9,24 @@ export type EnemyAreaLayer = boolean[][];
 export type MapEnemySpawnConfig = {
   id: string;
   bestiaryAnimaId: string;
+  bestiaryName: string | null;
+  imageData: string | null;
+  spriteScale: number;
+  flipHorizontal: boolean;
   spawnCount: number;
   respawnSeconds: number;
+  movementSpeed: number;
   spawnArea: EnemyAreaLayer;
   movementArea: EnemyAreaLayer;
+};
+
+export type MapPortalConfig = {
+  id: string;
+  targetMapId: string;
+  targetMapName: string | null;
+  targetSpawnX: number;
+  targetSpawnY: number;
+  area: boolean[][];
 };
 
 export type GameMap = {
@@ -29,6 +43,7 @@ export type GameMap = {
   tileLayer: (number | null)[][];
   collisionLayer: boolean[][];
   enemySpawns: MapEnemySpawnConfig[];
+  portals: MapPortalConfig[];
   spawnX: number;
   spawnY: number;
   isActive: boolean;
@@ -66,6 +81,7 @@ export type MapLayoutPayload = {
   tileLayer: (number | null)[][];
   collisionLayer: boolean[][];
   enemySpawns: MapEnemySpawnConfig[];
+  portals: MapPortalConfig[];
   spawnX: number;
   spawnY: number;
   backgroundScale: number;

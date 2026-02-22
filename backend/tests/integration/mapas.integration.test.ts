@@ -147,4 +147,57 @@ describe("mapas integration", () => {
     expect(invalidLayoutResponse.status).toBe(400);
     expect(invalidLayoutResponse.body.error.code).toBe("VALIDATION_ERROR");
   });
+
+  it("teleports player through a portal and keeps destination map as current", async () => {
+    const agent = await registerPlayerAgent();
+    const adminAgent = await loginAdminAgent();
+
+    const activeResponse = await agent.get("/mapas/ativo");
+    expect(activeResponse.status).toBe(200);
+    const sourceMapId = activeResponse.body.map.id as string;
+    const playerTileX = activeResponse.body.state.tileX as number;
+    const playerTileY = activeResponse.body.state.tileY as number;
+
+    const sourceMapResponse = await adminAgent.get(`/mapas/${sourceMapId}`);
+    expect(sourceMapResponse.status).toBe(200);
+
+    const targetCreate = await adminAgent.post("/mapas").send({ name: "Mapa Portal Destino" });
+    expect(targetCreate.status).toBe(201);
+    const targetMapId = targetCreate.body.map.id as string;
+
+    const area = Array.from({ length: 34 }, () => Array.from({ length: 60 }, () => false));
+    area[playerTileY][playerTileX] = true;
+    const sourceMap = sourceMapResponse.body.map;
+    const updateSourceLayout = await adminAgent.patch(`/mapas/${sourceMapId}/layout`).send({
+      tileLayer: sourceMap.tileLayer,
+      collisionLayer: sourceMap.collisionLayer,
+      enemySpawns: sourceMap.enemySpawns,
+      portals: [
+        {
+          id: "portal_test",
+          targetMapId,
+          targetMapName: "Mapa Portal Destino",
+          targetSpawnX: 5,
+          targetSpawnY: 6,
+          area,
+        },
+      ],
+      spawnX: sourceMap.spawnX,
+      spawnY: sourceMap.spawnY,
+      backgroundScale: sourceMap.backgroundScale,
+    });
+    expect(updateSourceLayout.status).toBe(200);
+
+    const teleportResponse = await agent.post("/mapas/teleportar").send({ portalId: "portal_test" });
+    expect(teleportResponse.status).toBe(200);
+    expect(teleportResponse.body.map.id).toBe(targetMapId);
+    expect(teleportResponse.body.state.mapId).toBe(targetMapId);
+    expect(teleportResponse.body.state.tileX).toBe(5);
+    expect(teleportResponse.body.state.tileY).toBe(6);
+
+    const afterTeleport = await agent.get("/mapas/ativo");
+    expect(afterTeleport.status).toBe(200);
+    expect(afterTeleport.body.map.id).toBe(targetMapId);
+    expect(afterTeleport.body.state.mapId).toBe(targetMapId);
+  });
 });

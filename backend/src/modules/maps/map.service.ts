@@ -5,6 +5,7 @@ import {
   GameMapListItemOutput,
   GameMapOutput,
   PlayerMapStateOutput,
+  UsePortalInput,
   UpdateActiveMapStateInput,
   UpdateMapAssetsInput,
   UpdateMapLayoutInput,
@@ -26,6 +27,7 @@ const toMapOutput = (map: MapEntity): GameMapOutput => ({
   tileLayer: map.tileLayer,
   collisionLayer: map.collisionLayer,
   enemySpawns: map.enemySpawns,
+  portals: map.portals,
   spawnX: map.spawnX,
   spawnY: map.spawnY,
   isActive: map.isActive,
@@ -74,24 +76,61 @@ export class MapService {
     return map;
   }
 
-  async getActiveWithState(userId: string): Promise<ActiveMapResponse> {
+  private async resolveCurrentMapWithState(userId: string) {
+    const latestState = await this.mapRepository.findLatestPlayerState(userId);
+    if (latestState) {
+      const latestMap = await this.mapRepository.findById(latestState.mapId);
+      if (latestMap) {
+        return { map: latestMap, state: latestState };
+      }
+    }
+
     const activeMap = await this.getOrCreateActiveMap();
     const existingState = await this.mapRepository.findPlayerState(userId, activeMap.id);
     const state =
       existingState ??
       (await this.mapRepository.createPlayerState(userId, activeMap.id, activeMap.spawnX, activeMap.spawnY));
 
+    return { map: activeMap, state };
+  }
+
+  async getActiveWithState(userId: string): Promise<ActiveMapResponse> {
+    const { map, state } = await this.resolveCurrentMapWithState(userId);
+
     return {
-      map: toMapOutput(activeMap),
+      map: toMapOutput(map),
       state: toPlayerMapStateOutput(state),
     };
   }
 
   async updateActiveState(userId: string, input: UpdateActiveMapStateInput) {
-    const activeMap = await this.getOrCreateActiveMap();
-    const state = await this.mapRepository.upsertPlayerState(userId, activeMap.id, input);
+    const { map } = await this.resolveCurrentMapWithState(userId);
+    const state = await this.mapRepository.upsertPlayerState(userId, map.id, input);
 
     return toPlayerMapStateOutput(state);
+  }
+
+  async usePortal(userId: string, input: UsePortalInput): Promise<ActiveMapResponse> {
+    const { map: currentMap, state: currentState } = await this.resolveCurrentMapWithState(userId);
+    const portal = currentMap.portals.find((item) => item.id === input.portalId);
+    if (!portal) {
+      throw new AppError(404, "PORTAL_NOT_FOUND", "Portal not found");
+    }
+
+    const targetMap = await this.ensureMapExists(portal.targetMapId);
+    const nextScaleX = currentState.scaleX > 0 ? currentState.scaleX : MAP_DEFAULT_SCALE;
+    const nextScaleY = currentState.scaleY > 0 ? currentState.scaleY : MAP_DEFAULT_SCALE;
+    const destinationState = await this.mapRepository.upsertPlayerState(userId, targetMap.id, {
+      tileX: portal.targetSpawnX,
+      tileY: portal.targetSpawnY,
+      scaleX: nextScaleX,
+      scaleY: nextScaleY,
+    });
+
+    return {
+      map: toMapOutput(targetMap),
+      state: toPlayerMapStateOutput(destinationState),
+    };
   }
 
   async list() {

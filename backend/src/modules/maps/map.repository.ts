@@ -1,13 +1,14 @@
 import { GameMap, PlayerMapState, Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
-import { MapEnemySpawnConfig, MapTileAsset, UpdateActiveMapStateInput, UpdateMapAssetsInput, UpdateMapLayoutInput } from "../../types/map";
+import { MapEnemySpawnConfig, MapPortalConfig, MapTileAsset, UpdateActiveMapStateInput, UpdateMapAssetsInput, UpdateMapLayoutInput } from "../../types/map";
 import { MAP_CELL_SIZE, MAP_COLS, MAP_DEFAULT_SCALE, MAP_ROWS, MAP_WORLD_HEIGHT, MAP_WORLD_WIDTH } from "./map.constants";
 
-type MapEntity = Omit<GameMap, "tilePalette" | "tileLayer" | "collisionLayer" | "enemySpawns"> & {
+type MapEntity = Omit<GameMap, "tilePalette" | "tileLayer" | "collisionLayer" | "enemySpawns" | "portals"> & {
   tilePalette: MapTileAsset[];
   tileLayer: (number | null)[][];
   collisionLayer: boolean[][];
   enemySpawns: MapEnemySpawnConfig[];
+  portals: MapPortalConfig[];
 };
 
 type PlayerMapStateEntity = PlayerMapState;
@@ -91,6 +92,21 @@ const normalizeEnemyAreaLayer = (value: unknown): boolean[][] => {
   });
 };
 
+const normalizePortalAreaLayer = (value: unknown): boolean[][] => {
+  if (!Array.isArray(value)) {
+    return createEmptyCollisionLayer();
+  }
+
+  return Array.from({ length: MAP_ROWS }, (_, rowIndex) => {
+    const row = value[rowIndex];
+    if (!Array.isArray(row)) {
+      return Array.from({ length: MAP_COLS }, () => false);
+    }
+
+    return Array.from({ length: MAP_COLS }, (_, colIndex) => row[colIndex] === true);
+  });
+};
+
 const normalizeEnemySpawns = (value: Prisma.JsonValue | null | undefined): MapEnemySpawnConfig[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -112,8 +128,13 @@ const normalizeEnemySpawns = (value: Prisma.JsonValue | null | undefined): MapEn
     output.push({
       id: data.id,
       bestiaryAnimaId: data.bestiaryAnimaId,
+      bestiaryName: typeof data.bestiaryName === "string" ? data.bestiaryName : null,
+      imageData: typeof data.imageData === "string" ? data.imageData : null,
+      spriteScale: typeof data.spriteScale === "number" && data.spriteScale > 0 ? data.spriteScale : 3,
+      flipHorizontal: data.flipHorizontal !== false,
       spawnCount: Math.max(1, spawnCount),
       respawnSeconds: Math.max(0.5, respawnSeconds),
+      movementSpeed: typeof data.movementSpeed === "number" && data.movementSpeed > 0 ? data.movementSpeed : 2.2,
       spawnArea: normalizeEnemyAreaLayer(data.spawnArea),
       movementArea: normalizeEnemyAreaLayer(data.movementArea),
     });
@@ -122,12 +143,69 @@ const normalizeEnemySpawns = (value: Prisma.JsonValue | null | undefined): MapEn
   return output;
 };
 
+const normalizePortals = (value: Prisma.JsonValue | null | undefined): MapPortalConfig[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const output: MapPortalConfig[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const data = item as Record<string, unknown>;
+    if (typeof data.id !== "string" || typeof data.targetMapId !== "string") {
+      continue;
+    }
+
+    const rawTargetSpawnX = typeof data.targetSpawnX === "number" ? Math.floor(data.targetSpawnX) : 0;
+    const rawTargetSpawnY = typeof data.targetSpawnY === "number" ? Math.floor(data.targetSpawnY) : 0;
+    output.push({
+      id: data.id,
+      targetMapId: data.targetMapId,
+      targetMapName: typeof data.targetMapName === "string" ? data.targetMapName : null,
+      targetSpawnX: Math.max(0, Math.min(MAP_COLS - 1, rawTargetSpawnX)),
+      targetSpawnY: Math.max(0, Math.min(MAP_ROWS - 1, rawTargetSpawnY)),
+      area: normalizePortalAreaLayer(data.area),
+    });
+  }
+
+  return output;
+};
+
+const sanitizeEnemySpawnsForStorage = (enemySpawns: MapEnemySpawnConfig[]) =>
+  enemySpawns.map((spawn) => ({
+    id: spawn.id,
+    bestiaryAnimaId: spawn.bestiaryAnimaId,
+    bestiaryName: spawn.bestiaryName ?? null,
+    imageData: null,
+    spriteScale: spawn.spriteScale,
+    flipHorizontal: spawn.flipHorizontal,
+    spawnCount: spawn.spawnCount,
+    respawnSeconds: spawn.respawnSeconds,
+    movementSpeed: spawn.movementSpeed,
+    spawnArea: spawn.spawnArea,
+    movementArea: spawn.movementArea,
+  }));
+
+const sanitizePortalsForStorage = (portals: MapPortalConfig[]) =>
+  portals.map((portal) => ({
+    id: portal.id,
+    targetMapId: portal.targetMapId,
+    targetMapName: portal.targetMapName ?? null,
+    targetSpawnX: portal.targetSpawnX,
+    targetSpawnY: portal.targetSpawnY,
+    area: portal.area,
+  }));
+
 const toEntity = (map: GameMap): MapEntity => ({
   ...map,
   tilePalette: normalizeTilePalette(map.tilePalette),
   tileLayer: normalizeTileLayer(map.tileLayer),
   collisionLayer: normalizeCollisionLayer(map.collisionLayer),
   enemySpawns: normalizeEnemySpawns(map.enemySpawns),
+  portals: normalizePortals(map.portals),
 });
 
 const defaultMapCreateData = (name: string, isActive: boolean) => ({
@@ -143,6 +221,7 @@ const defaultMapCreateData = (name: string, isActive: boolean) => ({
   tileLayer: createEmptyTileLayer(),
   collisionLayer: createEmptyCollisionLayer(),
   enemySpawns: [],
+  portals: [],
   spawnX: Math.floor(MAP_COLS / 2),
   spawnY: Math.floor(MAP_ROWS / 2),
   isActive,
@@ -158,6 +237,7 @@ export interface MapRepository {
   updateAssets(id: string, input: UpdateMapAssetsInput): Promise<MapEntity>;
   setActive(id: string): Promise<MapEntity>;
   findPlayerState(userId: string, mapId: string): Promise<PlayerMapStateEntity | null>;
+  findLatestPlayerState(userId: string): Promise<PlayerMapStateEntity | null>;
   upsertPlayerState(userId: string, mapId: string, input: UpdateActiveMapStateInput): Promise<PlayerMapStateEntity>;
   createPlayerState(userId: string, mapId: string, tileX: number, tileY: number): Promise<PlayerMapStateEntity>;
 }
@@ -207,7 +287,8 @@ export class PrismaMapRepository implements MapRepository {
       data: {
         tileLayer: input.tileLayer,
         collisionLayer: input.collisionLayer,
-        enemySpawns: input.enemySpawns,
+        enemySpawns: sanitizeEnemySpawnsForStorage(input.enemySpawns),
+        portals: sanitizePortalsForStorage(input.portals),
         spawnX: input.spawnX,
         spawnY: input.spawnY,
         backgroundScale: input.backgroundScale,
@@ -252,6 +333,13 @@ export class PrismaMapRepository implements MapRepository {
           mapId,
         },
       },
+    });
+  }
+
+  async findLatestPlayerState(userId: string) {
+    return prisma.playerMapState.findFirst({
+      where: { userId },
+      orderBy: { updatedAt: "desc" },
     });
   }
 

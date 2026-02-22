@@ -14,6 +14,8 @@ const activeMapPayload = {
     tilePalette: [],
     tileLayer: Array.from({ length: 34 }, () => Array.from({ length: 60 }, () => null)),
     collisionLayer: Array.from({ length: 34 }, () => Array.from({ length: 60 }, () => false)),
+    enemySpawns: [],
+    portals: [],
     spawnX: 30,
     spawnY: 17,
     isActive: true,

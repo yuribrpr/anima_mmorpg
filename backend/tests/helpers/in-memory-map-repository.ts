@@ -24,6 +24,7 @@ const createMapEntity = (id: string, name: string, isActive: boolean): MapEntity
     tileLayer: createEmptyTileLayer(),
     collisionLayer: createEmptyCollisionLayer(),
     enemySpawns: [],
+    portals: [],
     spawnX: Math.floor(MAP_COLS / 2),
     spawnY: Math.floor(MAP_ROWS / 2),
     isActive,
@@ -74,6 +75,7 @@ export class InMemoryMapRepository implements MapRepository {
     map.tileLayer = input.tileLayer;
     map.collisionLayer = input.collisionLayer;
     map.enemySpawns = input.enemySpawns;
+    map.portals = input.portals;
     map.spawnX = input.spawnX;
     map.spawnY = input.spawnY;
     map.backgroundScale = input.backgroundScale;
@@ -111,6 +113,17 @@ export class InMemoryMapRepository implements MapRepository {
 
   async findPlayerState(userId: string, mapId: string) {
     return this.states.get(`${userId}:${mapId}`) ?? null;
+  }
+
+  async findLatestPlayerState(userId: string) {
+    let latest: PlayerMapStateEntity | null = null;
+    for (const state of this.states.values()) {
+      if (state.userId !== userId) continue;
+      if (!latest || state.updatedAt > latest.updatedAt) {
+        latest = state;
+      }
+    }
+    return latest;
   }
 
   async upsertPlayerState(userId: string, mapId: string, input: UpdateActiveMapStateInput) {

@@ -3,11 +3,15 @@ import { Compass } from "lucide-react";
 import { decompressFrames, parseGIF, type ParsedFrame } from "gifuct-js";
 import { ApiError } from "@/lib/api";
 import { listAdoptedAnimas } from "@/lib/adocoes";
+import { listBestiaryAnimas } from "@/lib/bestiario";
 import { findNearestWalkableTile, findPathAStar, RENDER_BASE_HEIGHT, TILE_SIZE } from "@/lib/map-grid";
 import type { GridPoint } from "@/lib/map-grid";
-import { getActiveMap, updateActiveState } from "@/lib/mapas";
+import { getActiveMap, updateActiveState, usePortal } from "@/lib/mapas";
 import type { GameMap } from "@/types/mapa";
+import type { BestiaryAnima } from "@/types/bestiary-anima";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type PlayerRuntime = {
   tileX: number;
@@ -24,11 +28,122 @@ type PlayerRuntime = {
   moveStartedAt: number;
   moveDurationMs: number;
   facingX: -1 | 1;
+  hp: number;
+  maxHp: number;
+  attack: number;
+  defense: number;
+  critChance: number;
+  attackIntervalMs: number;
+  lastAttackAt: number;
+  hitFlashUntil: number;
+  attackLungeUntil: number;
+  attackLungeDx: number;
+  attackLungeDy: number;
+  attackLungeDistance: number;
+  trackingEnemyId: string | null;
+  nextTrackingPathAt: number;
 };
 
 type SpriteFrame = {
   canvas: HTMLCanvasElement;
   delayMs: number;
+};
+
+type SpriteAnimationState = {
+  index: number;
+  lastAt: number;
+  elapsed: number;
+};
+
+type SpriteAsset = {
+  image: HTMLImageElement | null;
+  frames: SpriteFrame[] | null;
+  animation: SpriteAnimationState;
+};
+
+type EnemyGroupRuntime = {
+  id: string;
+  name: string;
+  respawnMs: number;
+  movementSpeed: number;
+  attack: number;
+  defense: number;
+  maxHp: number;
+  critChance: number;
+  attackIntervalMs: number;
+  spawnArea: boolean[][];
+  movementArea: boolean[][];
+  movementCollisionLayer: boolean[][];
+  spawnTiles: GridPoint[];
+  movementTiles: GridPoint[];
+  spriteScale: number;
+  flipHorizontal: boolean;
+};
+
+type EnemyRuntime = {
+  id: string;
+  groupId: string;
+  tileX: number;
+  tileY: number;
+  renderX: number;
+  renderY: number;
+  moving: boolean;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  moveStartedAt: number;
+  moveDurationMs: number;
+  route: GridPoint[];
+  facingX: -1 | 1;
+  spawned: boolean;
+  respawnAt: number;
+  nextDecisionAt: number;
+  maxHp: number;
+  hp: number;
+  attack: number;
+  defense: number;
+  critChance: number;
+  attackIntervalMs: number;
+  lastAttackAt: number;
+  hitFlashUntil: number;
+  attackLungeUntil: number;
+  attackLungeDx: number;
+  attackLungeDy: number;
+  attackLungeDistance: number;
+  deathStartedAt: number;
+  spawnFxUntil: number;
+  aggroUntilAt: number;
+};
+
+type DamageText = {
+  id: string;
+  x: number;
+  y: number;
+  value: number;
+  createdAt: number;
+  ttlMs: number;
+  critical: boolean;
+  fromEnemy: boolean;
+};
+
+type AttackEffect = {
+  id: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  createdAt: number;
+  ttlMs: number;
+  fromEnemy: boolean;
+  critical: boolean;
+};
+
+type PortalPromptState = {
+  portalId: string;
+  targetMapName: string;
+  targetSpawnX: number;
+  targetSpawnY: number;
 };
 
 const getDataUrlMime = (dataUrl: string) => {
@@ -47,6 +162,95 @@ const dataUrlToBytes = (dataUrl: string) => {
   return bytes;
 };
 
+const decodeGifFrames = (dataUrl: string): SpriteFrame[] | null => {
+  const sourceBytes = dataUrlToBytes(dataUrl);
+  const sourceBuffer = sourceBytes.buffer.slice(sourceBytes.byteOffset, sourceBytes.byteOffset + sourceBytes.byteLength);
+  const parsed = parseGIF(sourceBuffer);
+  const frames = decompressFrames(parsed, true) as ParsedFrame[];
+  const width = parsed.lsd.width;
+  const height = parsed.lsd.height;
+
+  const compositionCanvas = document.createElement("canvas");
+  compositionCanvas.width = width;
+  compositionCanvas.height = height;
+  const compositionContext = compositionCanvas.getContext("2d", { willReadFrequently: true });
+  if (!compositionContext || frames.length === 0) {
+    return null;
+  }
+
+  const composedFrames: SpriteFrame[] = [];
+  for (const frame of frames) {
+    let restoreSnapshot: ImageData | null = null;
+    if (frame.disposalType === 3) {
+      restoreSnapshot = compositionContext.getImageData(0, 0, width, height);
+    }
+
+    const patchImageData = new ImageData(new Uint8ClampedArray(frame.patch), frame.dims.width, frame.dims.height);
+    compositionContext.putImageData(patchImageData, frame.dims.left, frame.dims.top);
+
+    const frameCanvas = document.createElement("canvas");
+    frameCanvas.width = width;
+    frameCanvas.height = height;
+    const frameContext = frameCanvas.getContext("2d");
+    if (!frameContext) {
+      continue;
+    }
+
+    frameContext.drawImage(compositionCanvas, 0, 0);
+    composedFrames.push({ canvas: frameCanvas, delayMs: Math.max(20, frame.delay || 80) });
+
+    if (frame.disposalType === 2) {
+      compositionContext.clearRect(frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height);
+    } else if (frame.disposalType === 3 && restoreSnapshot) {
+      compositionContext.putImageData(restoreSnapshot, 0, 0);
+    }
+  }
+
+  return composedFrames.length > 0 ? composedFrames : null;
+};
+
+const createSpriteAsset = (dataUrl: string): SpriteAsset => {
+  const animation: SpriteAnimationState = { index: 0, lastAt: 0, elapsed: 0 };
+  const mimeType = getDataUrlMime(dataUrl);
+  if (mimeType.includes("gif")) {
+    try {
+      const frames = decodeGifFrames(dataUrl);
+      if (frames && frames.length > 0) {
+        return { image: null, frames, animation };
+      }
+    } catch {
+      // Fallback below for malformed GIF payload.
+    }
+  }
+
+  const image = new Image();
+  image.src = dataUrl;
+  return { image, frames: null, animation };
+};
+
+const resolveSpriteFrame = (frames: SpriteFrame[] | null, animation: SpriteAnimationState, now: number): CanvasImageSource | null => {
+  if (!frames || frames.length === 0) {
+    return null;
+  }
+
+  if (animation.lastAt === 0) {
+    animation.lastAt = now;
+  }
+
+  const delta = now - animation.lastAt;
+  animation.lastAt = now;
+  animation.elapsed += delta;
+
+  let current = frames[animation.index] ?? frames[0];
+  while (animation.elapsed >= current.delayMs) {
+    animation.elapsed -= current.delayMs;
+    animation.index = (animation.index + 1) % frames.length;
+    current = frames[animation.index] ?? frames[0];
+  }
+
+  return current.canvas;
+};
+
 const keyToDirection: Record<string, GridPoint> = {
   ArrowUp: { x: 0, y: -1 },
   ArrowDown: { x: 0, y: 1 },
@@ -61,22 +265,136 @@ const keyToDirection: Record<string, GridPoint> = {
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 const pointsEqual = (a: GridPoint, b: GridPoint) => a.x === b.x && a.y === b.y;
+const enemyDirections: GridPoint[] = [
+  { x: -1, y: -1 },
+  { x: 0, y: -1 },
+  { x: 1, y: -1 },
+  { x: -1, y: 0 },
+  { x: 1, y: 0 },
+  { x: -1, y: 1 },
+  { x: 0, y: 1 },
+  { x: 1, y: 1 },
+];
+
+const pickRandom = <T,>(items: T[]) => {
+  if (items.length === 0) {
+    return null;
+  }
+  const index = Math.floor(Math.random() * items.length);
+  return items[index] ?? null;
+};
+
+const isTileInsideArea = (area: boolean[][], point: GridPoint) => area[point.y]?.[point.x] === true;
+
+const findNearestWalkableInArea = (origin: GridPoint, area: boolean[][], collisions: boolean[][]) => {
+  const rows = area.length;
+  const cols = area[0]?.length ?? 0;
+  if (isTileInsideArea(area, origin) && collisions[origin.y]?.[origin.x] !== true) {
+    return origin;
+  }
+
+  const visited = new Set<string>();
+  const queue: GridPoint[] = [origin];
+  visited.add(`${origin.x}:${origin.y}`);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const direction of enemyDirections) {
+      const next = { x: current.x + direction.x, y: current.y + direction.y };
+      if (next.x < 0 || next.x >= cols || next.y < 0 || next.y >= rows) {
+        continue;
+      }
+      const key = `${next.x}:${next.y}`;
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      if (isTileInsideArea(area, next) && collisions[next.y]?.[next.x] !== true) {
+        return next;
+      }
+      queue.push(next);
+    }
+  }
+
+  return null;
+};
+
+const ENEMY_DEATH_DURATION_MS = 420;
+const ENEMY_SPAWN_PORTAL_MS = 620;
+const ENEMY_AGGRO_DURATION_MS = 600_000;
+const DAMAGE_TEXT_TTL_MS = 760;
+const ATTACK_EFFECT_TTL_MS = 190;
+const ATTACK_LUNGE_DURATION_MS = 230;
+
+const isAdjacentTile = (from: GridPoint, to: GridPoint) => Math.abs(from.x - to.x) <= 1 && Math.abs(from.y - to.y) <= 1;
+
+const rollDamage = (attack: number, defense: number, critChance: number) => {
+  const variance = 0.84 + Math.random() * 0.32;
+  const base = Math.max(1, Math.round(attack * variance - defense * 0.45));
+  const critical = Math.random() * 100 < critChance;
+  const value = critical ? Math.max(2, Math.round(base * 1.5)) : base;
+  return { value, critical };
+};
+
+const toHealthRatio = (hp: number, maxHp: number) => {
+  if (maxHp <= 0) return 0;
+  return clamp(hp / maxHp, 0, 1);
+};
+
+const drawSpriteShadow = (
+  context: CanvasRenderingContext2D,
+  sprite: CanvasImageSource | null,
+  centerX: number,
+  baseY: number,
+  drawWidth: number,
+  drawHeight: number,
+  flipX: number,
+  alpha: number,
+) => {
+  if (!sprite) {
+    context.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+    context.beginPath();
+    context.ellipse(centerX, baseY - 2, Math.max(4, drawWidth * 0.18), Math.max(2.2, TILE_SIZE * 0.08), 0, 0, Math.PI * 2);
+    context.fill();
+    return;
+  }
+
+  context.save();
+  context.translate(centerX, baseY - 1);
+  context.scale(flipX, 0.22);
+  context.filter = `brightness(0) saturate(0) opacity(${clamp(alpha * 3.2, 0.12, 0.95)}) blur(0.6px)`;
+  context.drawImage(sprite, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+  context.filter = "none";
+  context.restore();
+};
 
 export const ExplorarPage = () => {
   const [mapData, setMapData] = useState<GameMap | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [portalPrompt, setPortalPrompt] = useState<PortalPromptState | null>(null);
+  const [teleporting, setTeleporting] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
   const backgroundImageRef = useRef<HTMLImageElement | null>(null);
   const spriteImageRef = useRef<HTMLImageElement | null>(null);
   const spriteFramesRef = useRef<SpriteFrame[] | null>(null);
-  const spriteAnimationRef = useRef({ index: 0, lastAt: 0, elapsed: 0 });
+  const spriteAnimationRef = useRef<SpriteAnimationState>({ index: 0, lastAt: 0, elapsed: 0 });
   const spriteBaseFlipRef = useRef(-1);
   const tileImageMapRef = useRef<Map<number, HTMLImageElement>>(new Map());
+  const enemySpriteMapRef = useRef<Map<string, SpriteAsset>>(new Map());
+  const bestiaryStatsRef = useRef<Map<string, BestiaryAnima>>(new Map());
   const routeRef = useRef<GridPoint[]>([]);
   const routeAllowsCornerCutRef = useRef(false);
+  const selectedEnemyIdRef = useRef<string | null>(null);
+  const engagedEnemyIdRef = useRef<string | null>(null);
+  const activePortalIdRef = useRef<string | null>(null);
+  const suppressPortalPromptUntilLeaveRef = useRef(true);
+  const portalPromptRef = useRef<PortalPromptState | null>(null);
+  const teleportingRef = useRef(false);
+  const damageTextsRef = useRef<DamageText[]>([]);
+  const attackEffectsRef = useRef<AttackEffect[]>([]);
   const heldKeysRef = useRef<Set<string>>(new Set());
   const mouseHeldRef = useRef(false);
   const hoverTargetRef = useRef<GridPoint | null>(null);
@@ -89,6 +407,8 @@ export const ExplorarPage = () => {
     footprintWidthPx: 0,
     layer: [],
   });
+  const enemyGroupsRef = useRef<Map<string, EnemyGroupRuntime>>(new Map());
+  const enemiesRef = useRef<EnemyRuntime[]>([]);
   const playerRef = useRef<PlayerRuntime>({
     tileX: 0,
     tileY: 0,
@@ -104,9 +424,31 @@ export const ExplorarPage = () => {
     moveStartedAt: 0,
     moveDurationMs: 120,
     facingX: -1,
+    hp: 100,
+    maxHp: 100,
+    attack: 36,
+    defense: 14,
+    critChance: 6,
+    attackIntervalMs: 850,
+    lastAttackAt: 0,
+    hitFlashUntil: 0,
+    attackLungeUntil: 0,
+    attackLungeDx: 0,
+    attackLungeDy: 0,
+    attackLungeDistance: 0,
+    trackingEnemyId: null,
+    nextTrackingPathAt: 0,
   });
 
   const [spriteData, setSpriteData] = useState<string | null>(null);
+
+  useEffect(() => {
+    portalPromptRef.current = portalPrompt;
+  }, [portalPrompt]);
+
+  useEffect(() => {
+    teleportingRef.current = teleporting;
+  }, [teleporting]);
 
   const persistState = useCallback(async (tileX: number, tileY: number, scaleX: number, scaleY: number) => {
     try {
@@ -146,7 +488,8 @@ export const ExplorarPage = () => {
       const sourceSize = getSpriteSourceSize();
       const sourceMax = Math.max(sourceSize.width, sourceSize.height);
       const spriteBaseUnit = TILE_SIZE / sourceMax;
-      const footprintWidthPx = Math.max(TILE_SIZE, sourceSize.width * spriteBaseUnit * playerRef.current.scaleX);
+      const visualFootprintWidthPx = Math.max(TILE_SIZE, sourceSize.width * spriteBaseUnit * playerRef.current.scaleX);
+      const footprintWidthPx = clamp(visualFootprintWidthPx, TILE_SIZE, TILE_SIZE * 3);
       const cache = navigationLayerCacheRef.current;
 
       if (cache.mapId === map.id && Math.abs(cache.footprintWidthPx - footprintWidthPx) < 0.001) {
@@ -193,6 +536,101 @@ export const ExplorarPage = () => {
     },
     [buildNavigationCollisionLayer],
   );
+
+  const rebuildEnemies = useCallback((map: GameMap) => {
+    const groups = new Map<string, EnemyGroupRuntime>();
+    const instances: EnemyRuntime[] = [];
+    const now = performance.now();
+
+    for (const config of map.enemySpawns ?? []) {
+      const bestiary = bestiaryStatsRef.current.get(config.bestiaryAnimaId) ?? null;
+      const spawnTiles: GridPoint[] = [];
+      const movementTiles: GridPoint[] = [];
+      for (let y = 0; y < map.rows; y += 1) {
+        for (let x = 0; x < map.cols; x += 1) {
+          if (config.spawnArea[y]?.[x] === true && map.collisionLayer[y]?.[x] !== true) {
+            spawnTiles.push({ x, y });
+          }
+          if (config.movementArea[y]?.[x] === true && map.collisionLayer[y]?.[x] !== true) {
+            movementTiles.push({ x, y });
+          }
+        }
+      }
+
+      const runtime: EnemyGroupRuntime = {
+        id: config.id,
+        name: bestiary?.name ?? config.bestiaryName ?? "Inimigo",
+        respawnMs: Math.max(500, Math.floor(config.respawnSeconds * 1000)),
+        movementSpeed: Math.max(config.movementSpeed ?? 2.2, 0.25),
+        attack: Math.max(1, bestiary?.attack ?? 28),
+        defense: Math.max(0, bestiary?.defense ?? 10),
+        maxHp: Math.max(1, bestiary?.maxHp ?? 220),
+        critChance: clamp(bestiary?.critChance ?? 4, 0, 100),
+        attackIntervalMs: Math.max(240, Math.floor((bestiary?.attackSpeedSeconds ?? 1.25) * 1000)),
+        spawnArea: config.spawnArea,
+        movementArea: config.movementArea,
+        movementCollisionLayer: [],
+        spawnTiles,
+        movementTiles: movementTiles.length > 0 ? movementTiles : spawnTiles,
+        spriteScale: Math.max(config.spriteScale || 3, 0.1),
+        flipHorizontal: config.flipHorizontal !== false,
+      };
+      const activeMovementArea = runtime.movementTiles === movementTiles ? config.movementArea : config.spawnArea;
+      runtime.movementArea = activeMovementArea;
+      runtime.movementCollisionLayer = Array.from({ length: map.rows }, (_, y) =>
+        Array.from({ length: map.cols }, (_, x) => map.collisionLayer[y]?.[x] === true || activeMovementArea[y]?.[x] !== true),
+      );
+      groups.set(config.id, runtime);
+
+      const shuffledSpawnTiles = spawnTiles.length > 1 ? [...spawnTiles].sort(() => Math.random() - 0.5) : spawnTiles;
+      for (let index = 0; index < config.spawnCount; index += 1) {
+        const tile =
+          shuffledSpawnTiles[index] ??
+          pickRandom(runtime.spawnTiles) ??
+          pickRandom(runtime.movementTiles) ??
+          null;
+
+        instances.push({
+          id: `${config.id}:${index}`,
+          groupId: config.id,
+          tileX: tile?.x ?? map.spawnX,
+          tileY: tile?.y ?? map.spawnY,
+          renderX: tile?.x ?? map.spawnX,
+          renderY: tile?.y ?? map.spawnY,
+          moving: false,
+          fromX: tile?.x ?? map.spawnX,
+          fromY: tile?.y ?? map.spawnY,
+          toX: tile?.x ?? map.spawnX,
+          toY: tile?.y ?? map.spawnY,
+          moveStartedAt: now,
+          moveDurationMs: 180,
+          route: [],
+          facingX: -1,
+          spawned: tile !== null,
+          respawnAt: tile ? 0 : now + runtime.respawnMs,
+          nextDecisionAt: now + 350 + Math.random() * 1100,
+          maxHp: runtime.maxHp,
+          hp: runtime.maxHp,
+          attack: runtime.attack,
+          defense: runtime.defense,
+          critChance: runtime.critChance,
+          attackIntervalMs: runtime.attackIntervalMs,
+          lastAttackAt: 0,
+          hitFlashUntil: 0,
+          attackLungeUntil: 0,
+          attackLungeDx: 0,
+          attackLungeDy: 0,
+          attackLungeDistance: 0,
+          deathStartedAt: 0,
+          spawnFxUntil: tile ? now + ENEMY_SPAWN_PORTAL_MS : 0,
+          aggroUntilAt: 0,
+        });
+      }
+    }
+
+    enemyGroupsRef.current = groups;
+    enemiesRef.current = instances;
+  }, []);
 
   const resolvePointerDestination = useCallback(
     (target: GridPoint | null): GridPoint | null => {
@@ -257,6 +695,77 @@ export const ExplorarPage = () => {
     [mapData],
   );
 
+  const pointerToWorld = useCallback(
+    (event: { clientX: number; clientY: number }) => {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        return null;
+      }
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: cameraRef.current.x + (event.clientX - rect.left),
+        y: cameraRef.current.y + (event.clientY - rect.top),
+      };
+    },
+    [],
+  );
+
+  const findEnemyAtWorldPoint = useCallback(
+    (worldX: number, worldY: number): EnemyRuntime | null => {
+      const ordered = enemiesRef.current
+        .filter((enemy) => enemy.spawned && enemy.deathStartedAt === 0)
+        .sort((left, right) => right.renderY - left.renderY);
+
+      for (const enemy of ordered) {
+        const group = enemyGroupsRef.current.get(enemy.groupId);
+        if (!group) {
+          continue;
+        }
+
+        const spriteAsset = enemySpriteMapRef.current.get(enemy.groupId);
+        const spriteSource =
+          spriteAsset?.frames?.[0]?.canvas ??
+          (spriteAsset?.image && spriteAsset.image.complete ? spriteAsset.image : null);
+        const sourceWidth = spriteSource && "width" in spriteSource ? spriteSource.width : TILE_SIZE;
+        const sourceHeight = spriteSource && "height" in spriteSource ? spriteSource.height : TILE_SIZE;
+        const baseUnit = TILE_SIZE / Math.max(sourceWidth, sourceHeight);
+        const drawWidth = sourceWidth * baseUnit * group.spriteScale;
+        const drawHeight = sourceHeight * baseUnit * group.spriteScale;
+        const centerX = enemy.renderX * TILE_SIZE + TILE_SIZE / 2;
+        const baseY = enemy.renderY * TILE_SIZE + TILE_SIZE;
+        const left = centerX - drawWidth / 2;
+        const right = centerX + drawWidth / 2;
+        const top = baseY - drawHeight;
+        const bottom = baseY;
+
+        if (worldX >= left && worldX <= right && worldY >= top && worldY <= bottom) {
+          return enemy;
+        }
+      }
+
+      return null;
+    },
+    [],
+  );
+
+  const findEnemyAtTile = useCallback((tile: GridPoint): EnemyRuntime | null => {
+    const candidates = enemiesRef.current.filter((enemy) => enemy.spawned && enemy.deathStartedAt === 0);
+    let best: EnemyRuntime | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const enemy of candidates) {
+      const dx = enemy.renderX - tile.x;
+      const dy = enemy.renderY - tile.y;
+      const score = dx * dx + dy * dy;
+      if (score <= 1.6 && score < bestScore) {
+        best = enemy;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }, []);
+
   const tryStartMove = useCallback(
     (target: GridPoint, options?: { allowCornerCut?: boolean }) => {
       const map = mapData;
@@ -265,6 +774,7 @@ export const ExplorarPage = () => {
       if (!isWalkableForPlayer(map, target, navigationLayer)) return false;
 
       const current = { x: playerRef.current.tileX, y: playerRef.current.tileY };
+      const currentBlocked = !isWalkableForPlayer(map, current, navigationLayer);
       const dx = target.x - current.x;
       const dy = target.y - current.y;
 
@@ -272,7 +782,7 @@ export const ExplorarPage = () => {
         return false;
       }
 
-      if (dx !== 0 && dy !== 0 && options?.allowCornerCut !== true) {
+      if (dx !== 0 && dy !== 0 && options?.allowCornerCut !== true && !currentBlocked) {
         const sideA = { x: current.x + dx, y: current.y };
         const sideB = { x: current.x, y: current.y + dy };
         if (!isWalkableForPlayer(map, sideA, navigationLayer) || !isWalkableForPlayer(map, sideB, navigationLayer)) {
@@ -297,15 +807,125 @@ export const ExplorarPage = () => {
     [buildNavigationCollisionLayer, isWalkableForPlayer, mapData],
   );
 
+  const cancelTracking = useCallback(() => {
+    playerRef.current.trackingEnemyId = null;
+    playerRef.current.nextTrackingPathAt = 0;
+    selectedEnemyIdRef.current = null;
+  }, []);
+
+  const pushDamageText = useCallback((x: number, y: number, value: number, critical: boolean, fromEnemy: boolean) => {
+    damageTextsRef.current.push({
+      id: `${performance.now()}_${Math.random().toString(16).slice(2, 8)}`,
+      x,
+      y,
+      value,
+      critical,
+      fromEnemy,
+      createdAt: performance.now(),
+      ttlMs: DAMAGE_TEXT_TTL_MS,
+    });
+  }, []);
+
+  const pushAttackEffect = useCallback((fromX: number, fromY: number, toX: number, toY: number, fromEnemy: boolean, critical: boolean) => {
+    attackEffectsRef.current.push({
+      id: `${performance.now()}_${Math.random().toString(16).slice(2, 8)}`,
+      fromX,
+      fromY,
+      toX,
+      toY,
+      fromEnemy,
+      critical,
+      createdAt: performance.now(),
+      ttlMs: ATTACK_EFFECT_TTL_MS,
+    });
+  }, []);
+
+  const hydrateMapRuntime = useCallback((map: GameMap): GameMap => {
+    const normalizedEnemySpawns = (map.enemySpawns ?? []).map((group) => {
+      const fallback = bestiaryStatsRef.current.get(group.bestiaryAnimaId);
+      return {
+        ...group,
+        bestiaryName: fallback?.name ?? group.bestiaryName ?? null,
+        imageData: fallback?.imageData ?? group.imageData ?? null,
+        spriteScale: Math.max(fallback?.spriteScale ?? group.spriteScale ?? 3, 0.1),
+        flipHorizontal: fallback?.flipHorizontal ?? group.flipHorizontal ?? true,
+        movementSpeed: Math.max(group.movementSpeed ?? 2.2, 0.25),
+      };
+    });
+    const normalizedPortals = (map.portals ?? []).map((portal) => ({
+      ...portal,
+      targetMapName: portal.targetMapName ?? null,
+    }));
+
+    return {
+      ...map,
+      enemySpawns: normalizedEnemySpawns,
+      portals: normalizedPortals,
+    };
+  }, []);
+
+  const confirmPortalTeleport = useCallback(async () => {
+    if (!portalPrompt || teleporting) {
+      return;
+    }
+
+    setTeleporting(true);
+    try {
+      const payload = await usePortal(portalPrompt.portalId);
+      const nextMap = hydrateMapRuntime(payload.map);
+      setMapData(nextMap);
+      playerRef.current.tileX = payload.state.tileX;
+      playerRef.current.tileY = payload.state.tileY;
+      playerRef.current.renderX = payload.state.tileX;
+      playerRef.current.renderY = payload.state.tileY;
+      playerRef.current.fromX = payload.state.tileX;
+      playerRef.current.fromY = payload.state.tileY;
+      playerRef.current.toX = payload.state.tileX;
+      playerRef.current.toY = payload.state.tileY;
+      playerRef.current.scaleX = payload.state.scaleX;
+      playerRef.current.scaleY = payload.state.scaleY;
+      playerRef.current.moving = false;
+      playerRef.current.moveStartedAt = 0;
+      routeRef.current = [];
+      routeAllowsCornerCutRef.current = false;
+      mouseHeldRef.current = false;
+      hoverTargetRef.current = null;
+      activePortalIdRef.current = null;
+      suppressPortalPromptUntilLeaveRef.current = true;
+      selectedEnemyIdRef.current = null;
+      engagedEnemyIdRef.current = null;
+      damageTextsRef.current = [];
+      attackEffectsRef.current = [];
+      setPortalPrompt(null);
+      cancelTracking();
+      setErrorMessage(null);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("Falha ao atravessar portal.");
+      }
+    } finally {
+      setTeleporting(false);
+    }
+  }, [cancelTracking, hydrateMapRuntime, portalPrompt, teleporting]);
+
   useEffect(() => {
     let mounted = true;
     const load = async () => {
       setLoading(true);
       try {
-        const [active, adopted] = await Promise.all([getActiveMap(), listAdoptedAnimas()]);
+        const [active, adopted, bestiary] = await Promise.all([
+          getActiveMap(),
+          listAdoptedAnimas(),
+          listBestiaryAnimas().catch(() => [] as BestiaryAnima[]),
+        ]);
         if (!mounted) return;
 
-        setMapData(active.map);
+        const bestiaryMap = new Map(bestiary.map((item) => [item.id, item]));
+        bestiaryStatsRef.current = bestiaryMap;
+        setMapData(hydrateMapRuntime(active.map));
+        suppressPortalPromptUntilLeaveRef.current = true;
         playerRef.current.tileX = active.state.tileX;
         playerRef.current.tileY = active.state.tileY;
         playerRef.current.renderX = active.state.tileX;
@@ -318,6 +938,15 @@ export const ExplorarPage = () => {
 
         playerRef.current.scaleX = initialScaleX;
         playerRef.current.scaleY = initialScaleY;
+        playerRef.current.maxHp = Math.max(1, primary?.totalMaxHp ?? primary?.baseAnima.maxHp ?? 100);
+        playerRef.current.hp = playerRef.current.maxHp;
+        playerRef.current.attack = Math.max(1, primary?.totalAttack ?? primary?.baseAnima.attack ?? 36);
+        playerRef.current.defense = Math.max(0, primary?.totalDefense ?? primary?.baseAnima.defense ?? 14);
+        playerRef.current.critChance = clamp(primary?.totalCritChance ?? primary?.baseAnima.critChance ?? 6, 0, 100);
+        playerRef.current.attackIntervalMs = Math.max(
+          160,
+          Math.floor((primary?.totalAttackSpeedSeconds ?? primary?.baseAnima.attackSpeedSeconds ?? 0.9) * 1000),
+        );
         spriteBaseFlipRef.current = primary?.baseAnima.flipHorizontal === false ? 1 : -1;
         setSpriteData(primary?.baseAnima.imageData ?? null);
 
@@ -349,7 +978,7 @@ export const ExplorarPage = () => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [hydrateMapRuntime]);
 
   useEffect(() => {
     if (!mapData?.backgroundImageData) {
@@ -363,6 +992,24 @@ export const ExplorarPage = () => {
   }, [mapData?.backgroundImageData]);
 
   useEffect(() => {
+    if (!mapData) {
+      enemyGroupsRef.current = new Map();
+      enemiesRef.current = [];
+      damageTextsRef.current = [];
+      attackEffectsRef.current = [];
+      selectedEnemyIdRef.current = null;
+      engagedEnemyIdRef.current = null;
+      activePortalIdRef.current = null;
+      suppressPortalPromptUntilLeaveRef.current = true;
+      setPortalPrompt(null);
+      cancelTracking();
+      return;
+    }
+
+    rebuildEnemies(mapData);
+  }, [cancelTracking, mapData, rebuildEnemies]);
+
+  useEffect(() => {
     if (!spriteData) {
       spriteImageRef.current = null;
       spriteFramesRef.current = null;
@@ -370,70 +1017,10 @@ export const ExplorarPage = () => {
       return;
     }
 
-    const mimeType = getDataUrlMime(spriteData);
-    if (mimeType.includes("gif")) {
-      try {
-        const sourceBytes = dataUrlToBytes(spriteData);
-        const sourceBuffer = sourceBytes.buffer.slice(sourceBytes.byteOffset, sourceBytes.byteOffset + sourceBytes.byteLength);
-        const parsed = parseGIF(sourceBuffer);
-        const frames = decompressFrames(parsed, true) as ParsedFrame[];
-        const width = parsed.lsd.width;
-        const height = parsed.lsd.height;
-
-        const compositionCanvas = document.createElement("canvas");
-        compositionCanvas.width = width;
-        compositionCanvas.height = height;
-        const compositionContext = compositionCanvas.getContext("2d", { willReadFrequently: true });
-        if (!compositionContext || frames.length === 0) {
-          spriteFramesRef.current = null;
-          spriteImageRef.current = null;
-          return;
-        }
-
-        const composedFrames: SpriteFrame[] = [];
-        for (const frame of frames) {
-          let restoreSnapshot: ImageData | null = null;
-          if (frame.disposalType === 3) {
-            restoreSnapshot = compositionContext.getImageData(0, 0, width, height);
-          }
-
-          const patchImageData = new ImageData(new Uint8ClampedArray(frame.patch), frame.dims.width, frame.dims.height);
-          compositionContext.putImageData(patchImageData, frame.dims.left, frame.dims.top);
-
-          const frameCanvas = document.createElement("canvas");
-          frameCanvas.width = width;
-          frameCanvas.height = height;
-          const frameContext = frameCanvas.getContext("2d");
-          if (!frameContext) {
-            continue;
-          }
-          frameContext.drawImage(compositionCanvas, 0, 0);
-          composedFrames.push({ canvas: frameCanvas, delayMs: Math.max(20, frame.delay || 80) });
-
-          if (frame.disposalType === 2) {
-            compositionContext.clearRect(frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height);
-          } else if (frame.disposalType === 3 && restoreSnapshot) {
-            compositionContext.putImageData(restoreSnapshot, 0, 0);
-          }
-        }
-
-        spriteFramesRef.current = composedFrames.length > 0 ? composedFrames : null;
-        spriteImageRef.current = null;
-        spriteAnimationRef.current = { index: 0, lastAt: 0, elapsed: 0 };
-      } catch {
-        spriteFramesRef.current = null;
-        const fallbackImage = new Image();
-        fallbackImage.src = spriteData;
-        spriteImageRef.current = fallbackImage;
-      }
-      return;
-    }
-
-    spriteFramesRef.current = null;
-    const image = new Image();
-    image.src = spriteData;
-    spriteImageRef.current = image;
-    spriteAnimationRef.current = { index: 0, lastAt: 0, elapsed: 0 };
+    const asset = createSpriteAsset(spriteData);
+    spriteFramesRef.current = asset.frames;
+    spriteImageRef.current = asset.image;
+    spriteAnimationRef.current = asset.animation;
   }, [spriteData]);
 
   useEffect(() => {
@@ -450,6 +1037,22 @@ export const ExplorarPage = () => {
     });
 
     tileImageMapRef.current = map;
+  }, [mapData]);
+
+  useEffect(() => {
+    if (!mapData) {
+      enemySpriteMapRef.current = new Map();
+      return;
+    }
+
+    const nextMap = new Map<string, SpriteAsset>();
+    for (const enemyGroup of mapData.enemySpawns) {
+      if (!enemyGroup.imageData) {
+        continue;
+      }
+      nextMap.set(enemyGroup.id, createSpriteAsset(enemyGroup.imageData));
+    }
+    enemySpriteMapRef.current = nextMap;
   }, [mapData]);
 
   useEffect(() => {
@@ -506,6 +1109,34 @@ export const ExplorarPage = () => {
       context.clearRect(0, 0, width, height);
 
       const now = performance.now();
+      const navigationLayer = buildNavigationCollisionLayer(map);
+      if (!playerRef.current.moving) {
+        const currentTile = { x: playerRef.current.tileX, y: playerRef.current.tileY };
+        if (!isWalkableForPlayer(map, currentTile, navigationLayer)) {
+          const nearestWalkable = findNearestWalkableTile(currentTile, navigationLayer);
+          if (nearestWalkable) {
+            playerRef.current.tileX = nearestWalkable.x;
+            playerRef.current.tileY = nearestWalkable.y;
+            playerRef.current.renderX = nearestWalkable.x;
+            playerRef.current.renderY = nearestWalkable.y;
+            playerRef.current.fromX = nearestWalkable.x;
+            playerRef.current.fromY = nearestWalkable.y;
+            playerRef.current.toX = nearestWalkable.x;
+            playerRef.current.toY = nearestWalkable.y;
+            routeRef.current = [];
+            routeAllowsCornerCutRef.current = false;
+            hoverTargetRef.current = null;
+            suppressPortalPromptUntilLeaveRef.current = true;
+            cancelTracking();
+            void persistState(
+              nearestWalkable.x,
+              nearestWalkable.y,
+              playerRef.current.scaleX,
+              playerRef.current.scaleY,
+            );
+          }
+        }
+      }
       let moveT = 0;
       if (playerRef.current.moving) {
         const elapsed = now - playerRef.current.moveStartedAt;
@@ -531,6 +1162,10 @@ export const ExplorarPage = () => {
 
       if (!playerRef.current.moving) {
         if (routeRef.current.length > 0) {
+          if (portalPromptRef.current && !teleportingRef.current) {
+            suppressPortalPromptUntilLeaveRef.current = true;
+            setPortalPrompt(null);
+          }
           const next = routeRef.current.shift();
           if (next) {
             const started = tryStartMove(next, { allowCornerCut: routeAllowsCornerCutRef.current });
@@ -555,12 +1190,398 @@ export const ExplorarPage = () => {
           dx = Math.sign(dx);
           dy = Math.sign(dy);
           if (dx !== 0 || dy !== 0) {
+            if (portalPromptRef.current && !teleportingRef.current) {
+              suppressPortalPromptUntilLeaveRef.current = true;
+              setPortalPrompt(null);
+            }
             const next = { x: playerRef.current.tileX + dx, y: playerRef.current.tileY + dy };
+            cancelTracking();
             if (tryStartMove(next)) {
               routeRef.current = [];
               routeAllowsCornerCutRef.current = false;
             }
           }
+        }
+      }
+
+      const trackingEnemyId = playerRef.current.trackingEnemyId;
+      if (trackingEnemyId && !playerRef.current.moving) {
+        const targetEnemy = enemiesRef.current.find(
+          (enemy) => enemy.id === trackingEnemyId && enemy.spawned && enemy.deathStartedAt === 0,
+        );
+        if (!targetEnemy) {
+          cancelTracking();
+        } else {
+          const playerPoint = { x: playerRef.current.tileX, y: playerRef.current.tileY };
+          const enemyPoint = { x: targetEnemy.tileX, y: targetEnemy.tileY };
+          const inRange = isAdjacentTile(playerPoint, enemyPoint);
+          if (targetEnemy.renderX > playerRef.current.renderX + 0.01) {
+            playerRef.current.facingX = 1;
+          } else if (targetEnemy.renderX < playerRef.current.renderX - 0.01) {
+            playerRef.current.facingX = -1;
+          }
+          if (playerRef.current.renderX > targetEnemy.renderX + 0.01) {
+            targetEnemy.facingX = 1;
+          } else if (playerRef.current.renderX < targetEnemy.renderX - 0.01) {
+            targetEnemy.facingX = -1;
+          }
+
+          if (inRange) {
+            if (now - playerRef.current.lastAttackAt >= playerRef.current.attackIntervalMs) {
+              playerRef.current.lastAttackAt = now;
+              engagedEnemyIdRef.current = targetEnemy.id;
+              for (const enemy of enemiesRef.current) {
+                if (enemy.id !== targetEnemy.id) {
+                  enemy.aggroUntilAt = 0;
+                  enemy.route = [];
+                }
+              }
+              const damage = rollDamage(playerRef.current.attack, targetEnemy.defense, playerRef.current.critChance);
+              targetEnemy.hp = Math.max(0, targetEnemy.hp - damage.value);
+              targetEnemy.hitFlashUntil = now + 130;
+              const fromWorldX = playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2;
+              const fromWorldY = playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.5;
+              const toWorldX = targetEnemy.renderX * TILE_SIZE + TILE_SIZE / 2;
+              const toWorldY = targetEnemy.renderY * TILE_SIZE + TILE_SIZE * 0.5;
+              const lungeDistance = Math.hypot(toWorldX - fromWorldX, toWorldY - fromWorldY) || 1;
+              playerRef.current.attackLungeDx = (toWorldX - fromWorldX) / lungeDistance;
+              playerRef.current.attackLungeDy = (toWorldY - fromWorldY) / lungeDistance;
+              playerRef.current.attackLungeDistance = clamp(lungeDistance * 0.42, 6, 20);
+              playerRef.current.attackLungeUntil = now + ATTACK_LUNGE_DURATION_MS;
+              targetEnemy.aggroUntilAt = now + ENEMY_AGGRO_DURATION_MS;
+              pushAttackEffect(
+                playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2,
+                playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.35,
+                targetEnemy.renderX * TILE_SIZE + TILE_SIZE / 2,
+                targetEnemy.renderY * TILE_SIZE + TILE_SIZE * 0.35,
+                false,
+                damage.critical,
+              );
+              pushDamageText(
+                targetEnemy.renderX * TILE_SIZE + TILE_SIZE / 2,
+                targetEnemy.renderY * TILE_SIZE + TILE_SIZE * 0.25,
+                damage.value,
+                damage.critical,
+                false,
+              );
+
+              if (targetEnemy.hp <= 0) {
+                targetEnemy.hp = 0;
+                targetEnemy.route = [];
+                targetEnemy.moving = false;
+                targetEnemy.deathStartedAt = now;
+                targetEnemy.aggroUntilAt = 0;
+                if (selectedEnemyIdRef.current === targetEnemy.id) {
+                  selectedEnemyIdRef.current = null;
+                }
+                if (engagedEnemyIdRef.current === targetEnemy.id) {
+                  engagedEnemyIdRef.current = null;
+                }
+                if (playerRef.current.trackingEnemyId === targetEnemy.id) {
+                  cancelTracking();
+                }
+              }
+            }
+          } else if (now >= playerRef.current.nextTrackingPathAt && routeRef.current.length === 0) {
+            const navigationLayer = buildNavigationCollisionLayer(map);
+            const destinations: GridPoint[] = [];
+            for (const direction of enemyDirections) {
+              const tile = { x: enemyPoint.x + direction.x, y: enemyPoint.y + direction.y };
+              if (isWalkableForPlayer(map, tile, navigationLayer)) {
+                destinations.push(tile);
+              }
+            }
+
+            if (destinations.length === 0 && isWalkableForPlayer(map, enemyPoint, navigationLayer)) {
+              destinations.push(enemyPoint);
+            }
+
+            let bestPath: GridPoint[] = [];
+            const pathLayer = navigationLayer.map((row) => row.slice());
+            pathLayer[playerPoint.y][playerPoint.x] = false;
+            for (const destination of destinations) {
+              const route = findPathAStar(playerPoint, destination, pathLayer, { allowCornerCut: true });
+              if (route.length > 1 && (bestPath.length === 0 || route.length < bestPath.length)) {
+                bestPath = route;
+              }
+            }
+
+            if (bestPath.length > 1) {
+              routeRef.current = bestPath.slice(1);
+              routeAllowsCornerCutRef.current = true;
+            }
+            playerRef.current.nextTrackingPathAt = now + 140;
+          }
+        }
+      }
+
+      if (engagedEnemyIdRef.current) {
+        const engagedEnemy = enemiesRef.current.find(
+          (enemy) => enemy.id === engagedEnemyIdRef.current && enemy.spawned && enemy.deathStartedAt === 0,
+        );
+        if (!engagedEnemy) {
+          engagedEnemyIdRef.current = null;
+        } else {
+          if (engagedEnemy.renderX > playerRef.current.renderX + 0.01) {
+            playerRef.current.facingX = 1;
+          } else if (engagedEnemy.renderX < playerRef.current.renderX - 0.01) {
+            playerRef.current.facingX = -1;
+          }
+          if (playerRef.current.renderX > engagedEnemy.renderX + 0.01) {
+            engagedEnemy.facingX = 1;
+          } else if (playerRef.current.renderX < engagedEnemy.renderX - 0.01) {
+            engagedEnemy.facingX = -1;
+          }
+          if (now >= engagedEnemy.aggroUntilAt && playerRef.current.trackingEnemyId !== engagedEnemy.id) {
+            engagedEnemyIdRef.current = null;
+          }
+        }
+      }
+
+      const startEnemyStep = (enemy: EnemyRuntime, group: EnemyGroupRuntime, next: GridPoint, speedMultiplier = 1) => {
+        const dx = next.x - enemy.tileX;
+        const dy = next.y - enemy.tileY;
+        if (dx > 0) {
+          enemy.facingX = 1;
+        } else if (dx < 0) {
+          enemy.facingX = -1;
+        }
+        enemy.moving = true;
+        enemy.fromX = enemy.tileX;
+        enemy.fromY = enemy.tileY;
+        enemy.toX = next.x;
+        enemy.toY = next.y;
+        enemy.moveStartedAt = now;
+        const distance = Math.max(1, Math.hypot(dx, dy));
+        const speed = Math.max(group.movementSpeed * speedMultiplier, 0.25);
+        enemy.moveDurationMs = clamp((distance / speed) * 1000, 90, 1400);
+      };
+
+      for (const enemy of enemiesRef.current) {
+        const group = enemyGroupsRef.current.get(enemy.groupId);
+        if (!group) {
+          continue;
+        }
+
+        if (enemy.deathStartedAt > 0) {
+          const deathProgress = clamp((now - enemy.deathStartedAt) / ENEMY_DEATH_DURATION_MS, 0, 1);
+          if (deathProgress >= 1) {
+            if (engagedEnemyIdRef.current === enemy.id) {
+              engagedEnemyIdRef.current = null;
+            }
+            enemy.deathStartedAt = 0;
+            enemy.spawned = false;
+            enemy.respawnAt = now + group.respawnMs;
+            enemy.hp = enemy.maxHp;
+            enemy.route = [];
+          }
+          continue;
+        }
+
+        if (!enemy.spawned) {
+          if (now >= enemy.respawnAt) {
+            const spawnTile = pickRandom(group.spawnTiles) ?? pickRandom(group.movementTiles);
+            if (spawnTile) {
+              enemy.spawned = true;
+              enemy.tileX = spawnTile.x;
+              enemy.tileY = spawnTile.y;
+              enemy.renderX = spawnTile.x;
+              enemy.renderY = spawnTile.y;
+              enemy.hp = enemy.maxHp;
+              enemy.route = [];
+              enemy.aggroUntilAt = 0;
+              enemy.lastAttackAt = 0;
+              enemy.spawnFxUntil = now + ENEMY_SPAWN_PORTAL_MS;
+              enemy.nextDecisionAt = now + 350 + Math.random() * 900;
+            } else {
+              enemy.respawnAt = now + group.respawnMs;
+            }
+          }
+          continue;
+        }
+
+        if (playerRef.current.trackingEnemyId === enemy.id) {
+          engagedEnemyIdRef.current = enemy.id;
+          enemy.aggroUntilAt = now + ENEMY_AGGRO_DURATION_MS;
+        }
+        if (engagedEnemyIdRef.current && enemy.id !== engagedEnemyIdRef.current && enemy.aggroUntilAt > 0) {
+          enemy.aggroUntilAt = 0;
+          enemy.route = [];
+        }
+        const isAggro = engagedEnemyIdRef.current === enemy.id && now < enemy.aggroUntilAt;
+        if (isAggro) {
+          if (playerRef.current.renderX > enemy.renderX + 0.01) {
+            enemy.facingX = 1;
+          } else if (playerRef.current.renderX < enemy.renderX - 0.01) {
+            enemy.facingX = -1;
+          }
+        }
+
+        if (enemy.moving) {
+          const t = clamp((now - enemy.moveStartedAt) / enemy.moveDurationMs, 0, 1);
+          enemy.renderX = enemy.fromX + (enemy.toX - enemy.fromX) * t;
+          enemy.renderY = enemy.fromY + (enemy.toY - enemy.fromY) * t;
+          if (t >= 1) {
+            enemy.moving = false;
+            enemy.tileX = enemy.toX;
+            enemy.tileY = enemy.toY;
+            enemy.renderX = enemy.toX;
+            enemy.renderY = enemy.toY;
+          }
+          continue;
+        }
+
+        const playerTile = { x: playerRef.current.tileX, y: playerRef.current.tileY };
+        const enemyTile = { x: enemy.tileX, y: enemy.tileY };
+        const inRangeForAttack = isAdjacentTile(enemyTile, playerTile);
+
+        if (isAggro && inRangeForAttack && now - enemy.lastAttackAt >= enemy.attackIntervalMs) {
+          enemy.lastAttackAt = now;
+          const damage = rollDamage(enemy.attack, playerRef.current.defense, enemy.critChance);
+          playerRef.current.hp = clamp(playerRef.current.hp - damage.value, 1, playerRef.current.maxHp);
+          playerRef.current.hitFlashUntil = now + 130;
+          const fromWorldX = enemy.renderX * TILE_SIZE + TILE_SIZE / 2;
+          const fromWorldY = enemy.renderY * TILE_SIZE + TILE_SIZE * 0.5;
+          const toWorldX = playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2;
+          const toWorldY = playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.5;
+          const lungeDistance = Math.hypot(toWorldX - fromWorldX, toWorldY - fromWorldY) || 1;
+          enemy.attackLungeDx = (toWorldX - fromWorldX) / lungeDistance;
+          enemy.attackLungeDy = (toWorldY - fromWorldY) / lungeDistance;
+          enemy.attackLungeDistance = clamp(lungeDistance * 0.42, 6, 20);
+          enemy.attackLungeUntil = now + ATTACK_LUNGE_DURATION_MS;
+          pushAttackEffect(
+            enemy.renderX * TILE_SIZE + TILE_SIZE / 2,
+            enemy.renderY * TILE_SIZE + TILE_SIZE * 0.35,
+            playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2,
+            playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.35,
+            true,
+            damage.critical,
+          );
+          pushDamageText(
+            playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2,
+            playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.15,
+            damage.value,
+            damage.critical,
+            true,
+          );
+          enemy.nextDecisionAt = now + 120;
+          continue;
+        }
+
+        const shouldOrbit = isAggro && inRangeForAttack && now - enemy.lastAttackAt < enemy.attackIntervalMs;
+
+        if (isAggro && enemy.route.length > 0) {
+          enemy.route = [];
+        }
+
+        if (!isAggro && enemy.route.length > 0) {
+          const nextStep = enemy.route.shift();
+          if (nextStep && group.movementCollisionLayer[nextStep.y]?.[nextStep.x] !== true) {
+            startEnemyStep(enemy, group, nextStep, isAggro ? 1.3 : 1);
+            continue;
+          }
+          enemy.route = [];
+          enemy.nextDecisionAt = now + 200;
+        }
+
+        if (now < enemy.nextDecisionAt && !isAggro) {
+          continue;
+        }
+
+        const planRouteToDestination = (destinationCandidate: GridPoint, speedMultiplier = 1) => {
+          let destination = destinationCandidate;
+          if (group.movementCollisionLayer[destination.y]?.[destination.x] === true) {
+            const adjusted =
+              findNearestWalkableInArea(destination, group.movementArea, map.collisionLayer) ??
+              findNearestWalkableTile(destination, group.movementCollisionLayer.map((row) => row.slice()));
+            if (!adjusted || group.movementCollisionLayer[adjusted.y]?.[adjusted.x] === true) {
+              return false;
+            }
+            destination = adjusted;
+          }
+
+          const enemyStart = { x: enemy.tileX, y: enemy.tileY };
+          const layer = group.movementCollisionLayer.map((row) => row.slice());
+          if (enemyStart.y >= 0 && enemyStart.y < map.rows && enemyStart.x >= 0 && enemyStart.x < map.cols) {
+            layer[enemyStart.y][enemyStart.x] = false;
+          }
+
+          const route = findPathAStar(enemyStart, destination, layer, { allowCornerCut: false });
+          if (route.length <= 1) {
+            return false;
+          }
+          enemy.route = route.slice(1);
+          const nextStep = enemy.route.shift();
+          if (!nextStep) {
+            return false;
+          }
+          startEnemyStep(enemy, group, nextStep, speedMultiplier);
+          return true;
+        };
+
+        if (isAggro) {
+          let chaseTarget: GridPoint | null = null;
+          if (shouldOrbit) {
+            const orbitCandidates = enemyDirections
+              .map((direction) => ({ x: playerTile.x + direction.x, y: playerTile.y + direction.y }))
+              .filter((candidate) => {
+                if (candidate.x === enemyTile.x && candidate.y === enemyTile.y) return false;
+                if (candidate.x < 0 || candidate.x >= map.cols || candidate.y < 0 || candidate.y >= map.rows) return false;
+                return group.movementCollisionLayer[candidate.y]?.[candidate.x] !== true;
+              });
+            chaseTarget = pickRandom(orbitCandidates);
+          }
+
+          if (!chaseTarget) {
+            chaseTarget =
+              findNearestWalkableInArea(playerTile, group.movementArea, map.collisionLayer) ??
+              findNearestWalkableTile(playerTile, group.movementCollisionLayer.map((row) => row.slice()));
+          }
+
+          if (!chaseTarget || !planRouteToDestination(chaseTarget, 1.3)) {
+            enemy.nextDecisionAt = now + (shouldOrbit ? 70 : 300);
+          } else {
+            enemy.nextDecisionAt = now + (shouldOrbit ? 55 : 90);
+          }
+          continue;
+        }
+
+        const desiredDestination = pickRandom(group.movementTiles);
+        if (!desiredDestination) {
+          enemy.nextDecisionAt = now + group.respawnMs;
+          continue;
+        }
+
+        if (!planRouteToDestination(desiredDestination, 1)) {
+          enemy.nextDecisionAt = now + 350 + Math.random() * 900;
+        }
+      }
+
+      const standingPortal = (map.portals ?? []).find(
+        (portal) => portal.area[playerRef.current.tileY]?.[playerRef.current.tileX] === true,
+      );
+      if (standingPortal) {
+        if (suppressPortalPromptUntilLeaveRef.current) {
+          activePortalIdRef.current = null;
+        } else if (
+          !suppressPortalPromptUntilLeaveRef.current &&
+          activePortalIdRef.current !== standingPortal.id &&
+          !portalPromptRef.current &&
+          !teleportingRef.current
+        ) {
+          setPortalPrompt({
+            portalId: standingPortal.id,
+            targetMapName: standingPortal.targetMapName ?? "Mapa de destino",
+            targetSpawnX: standingPortal.targetSpawnX,
+            targetSpawnY: standingPortal.targetSpawnY,
+          });
+        }
+        activePortalIdRef.current = standingPortal.id;
+      } else {
+        activePortalIdRef.current = null;
+        suppressPortalPromptUntilLeaveRef.current = false;
+        if (portalPromptRef.current && !teleportingRef.current) {
+          setPortalPrompt(null);
         }
       }
 
@@ -603,6 +1624,48 @@ export const ExplorarPage = () => {
         }
       }
 
+      if ((map.portals ?? []).length > 0) {
+        for (const portal of map.portals) {
+          const isActivePortal = portal.id === activePortalIdRef.current;
+          const wave = (Math.sin(now / 240) + 1) * 0.5;
+          const spin = now / 520;
+          const glowAlpha = isActivePortal ? 0.22 + wave * 0.22 : 0.12 + wave * 0.14;
+          const ringAlpha = isActivePortal ? 0.62 + wave * 0.3 : 0.34 + wave * 0.22;
+          const tileCenters: Array<{ x: number; y: number }> = [];
+
+          for (let y = 0; y < map.rows; y += 1) {
+            for (let x = 0; x < map.cols; x += 1) {
+              if (portal.area[y]?.[x] !== true) continue;
+              const worldX = x * TILE_SIZE;
+              const worldY = y * TILE_SIZE;
+              context.fillStyle = `rgba(99, 102, 241, ${glowAlpha})`;
+              context.fillRect(worldX + 1, worldY + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+              tileCenters.push({ x: worldX + TILE_SIZE / 2, y: worldY + TILE_SIZE / 2 });
+            }
+          }
+
+          for (const center of tileCenters) {
+            const radius = 5.2 + wave * 2.3;
+            context.save();
+            context.translate(center.x, center.y);
+            context.rotate(spin);
+            context.strokeStyle = `rgba(165, 180, 252, ${ringAlpha})`;
+            context.lineWidth = isActivePortal ? 1.7 : 1.3;
+            context.setLineDash([6, 4]);
+            context.lineDashOffset = -(now / 35);
+            context.beginPath();
+            context.ellipse(0, 0, radius, radius * 0.58, 0, 0, Math.PI * 2);
+            context.stroke();
+            context.setLineDash([]);
+            context.beginPath();
+            context.fillStyle = `rgba(129, 140, 248, ${0.35 + wave * 0.25})`;
+            context.arc(0, 0, 1.8 + wave * 0.7, 0, Math.PI * 2);
+            context.fill();
+            context.restore();
+          }
+        }
+      }
+
       const hoverTile = resolvePointerDestination(hoverTargetRef.current);
       if (hoverTile) {
         const tileX = hoverTile.x * TILE_SIZE;
@@ -615,9 +1678,11 @@ export const ExplorarPage = () => {
       }
 
       if (routeRef.current.length > 0) {
-        context.strokeStyle = "rgba(226, 232, 240, 0.5)";
-        context.lineWidth = 1.75;
-        context.setLineDash([7, 10]);
+        const hasTargetLock = Boolean(playerRef.current.trackingEnemyId);
+        const routePulse = 0.7 + (Math.sin(now / 120) + 1) * 0.15;
+        context.strokeStyle = hasTargetLock ? `rgba(248, 113, 113, ${routePulse})` : "rgba(226, 232, 240, 0.5)";
+        context.lineWidth = hasTargetLock ? 2.25 : 1.75;
+        context.setLineDash(hasTargetLock ? [9, 7] : [7, 10]);
         context.lineCap = "round";
         context.beginPath();
         context.moveTo(playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2, playerRef.current.renderY * TILE_SIZE + TILE_SIZE / 2);
@@ -627,10 +1692,10 @@ export const ExplorarPage = () => {
         context.stroke();
         context.setLineDash([]);
 
-        context.fillStyle = "rgba(148, 163, 184, 0.55)";
+        context.fillStyle = hasTargetLock ? "rgba(248, 113, 113, 0.82)" : "rgba(148, 163, 184, 0.55)";
         for (const point of routeRef.current) {
           context.beginPath();
-          context.arc(point.x * TILE_SIZE + TILE_SIZE / 2, point.y * TILE_SIZE + TILE_SIZE / 2, 1.8, 0, Math.PI * 2);
+          context.arc(point.x * TILE_SIZE + TILE_SIZE / 2, point.y * TILE_SIZE + TILE_SIZE / 2, hasTargetLock ? 2.45 : 1.8, 0, Math.PI * 2);
           context.fill();
         }
 
@@ -638,72 +1703,315 @@ export const ExplorarPage = () => {
         if (last) {
           const tileX = last.x * TILE_SIZE;
           const tileY = last.y * TILE_SIZE;
-          context.fillStyle = "rgba(226, 232, 240, 0.08)";
+          context.fillStyle = hasTargetLock ? "rgba(248, 113, 113, 0.12)" : "rgba(226, 232, 240, 0.08)";
           context.fillRect(tileX + 0.5, tileY + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
-          context.strokeStyle = "rgba(226, 232, 240, 0.82)";
-          context.lineWidth = 1.35;
+          context.strokeStyle = hasTargetLock ? "rgba(248, 113, 113, 0.95)" : "rgba(226, 232, 240, 0.82)";
+          context.lineWidth = hasTargetLock ? 1.9 : 1.35;
           context.strokeRect(tileX + 0.5, tileY + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
         }
       }
 
-      let sprite: CanvasImageSource | null = spriteImageRef.current;
-      const spriteFrames = spriteFramesRef.current;
-      if (spriteFrames && spriteFrames.length > 0) {
-        if (spriteAnimationRef.current.lastAt === 0) {
-          spriteAnimationRef.current.lastAt = now;
-        }
-
-        const delta = now - spriteAnimationRef.current.lastAt;
-        spriteAnimationRef.current.lastAt = now;
-        spriteAnimationRef.current.elapsed += delta;
-
-        let current = spriteFrames[spriteAnimationRef.current.index] ?? spriteFrames[0];
-        while (spriteAnimationRef.current.elapsed >= current.delayMs) {
-          spriteAnimationRef.current.elapsed -= current.delayMs;
-          spriteAnimationRef.current.index = (spriteAnimationRef.current.index + 1) % spriteFrames.length;
-          current = spriteFrames[spriteAnimationRef.current.index] ?? spriteFrames[0];
-        }
-
-        sprite = current.canvas;
+      const enemyGroupFrameMap = new Map<string, CanvasImageSource | null>();
+      for (const [groupId, asset] of enemySpriteMapRef.current.entries()) {
+        const animatedFrame = resolveSpriteFrame(asset.frames, asset.animation, now);
+        const staticImage = asset.image && asset.image.complete ? asset.image : null;
+        enemyGroupFrameMap.set(groupId, animatedFrame ?? staticImage);
       }
-      const spriteSourceWidth =
-        sprite && "width" in sprite && typeof sprite.width === "number" && sprite.width > 0 ? sprite.width : TILE_SIZE;
-      const spriteSourceHeight =
-        sprite && "height" in sprite && typeof sprite.height === "number" && sprite.height > 0 ? sprite.height : TILE_SIZE;
-      const spriteBaseUnit = TILE_SIZE / Math.max(spriteSourceWidth, spriteSourceHeight);
-      const spriteBaseWidth = spriteSourceWidth * spriteBaseUnit * playerRef.current.scaleX;
-      const spriteBaseHeight = spriteSourceHeight * spriteBaseUnit * playerRef.current.scaleY;
-      const centerX = playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2;
-      const baseY = playerRef.current.renderY * TILE_SIZE + TILE_SIZE;
+
+      let playerSprite: CanvasImageSource | null = resolveSpriteFrame(spriteFramesRef.current, spriteAnimationRef.current, now);
+      if (!playerSprite && spriteImageRef.current?.complete) {
+        playerSprite = spriteImageRef.current;
+      }
+
+      type RenderableEntity = {
+        depth: number;
+        order: number;
+        draw: () => void;
+      };
+
+      const entities: RenderableEntity[] = [];
+      let entityOrder = 0;
+
+      for (const enemy of enemiesRef.current) {
+        if (!enemy.spawned) {
+          continue;
+        }
+
+        const group = enemyGroupsRef.current.get(enemy.groupId);
+        if (!group) {
+          continue;
+        }
+
+        const sprite = enemyGroupFrameMap.get(enemy.groupId) ?? null;
+        const spriteWidth = sprite && "width" in sprite && typeof sprite.width === "number" && sprite.width > 0 ? sprite.width : TILE_SIZE;
+        const spriteHeight = sprite && "height" in sprite && typeof sprite.height === "number" && sprite.height > 0 ? sprite.height : TILE_SIZE;
+        const baseUnit = TILE_SIZE / Math.max(spriteWidth, spriteHeight);
+        const drawWidth = spriteWidth * baseUnit * group.spriteScale;
+        const drawHeight = spriteHeight * baseUnit * group.spriteScale;
+        const centerX = enemy.renderX * TILE_SIZE + TILE_SIZE / 2;
+        const baseY = enemy.renderY * TILE_SIZE + TILE_SIZE;
+        const movementProgress = enemy.moving ? clamp((now - enemy.moveStartedAt) / enemy.moveDurationMs, 0, 1) : 0;
+        const wave = Math.sin(movementProgress * Math.PI);
+        const bobY = enemy.moving ? Math.abs(wave) * 2.2 : 0;
+        const shadowPulse = enemy.moving ? Math.abs(wave) * 0.05 : 0;
+        const baseFlip = group.flipHorizontal ? -1 : 1;
+        const lungeProgress = enemy.attackLungeUntil > now ? 1 - (enemy.attackLungeUntil - now) / ATTACK_LUNGE_DURATION_MS : 0;
+        const lungePingPong = lungeProgress < 0.5 ? lungeProgress * 2 : (1 - lungeProgress) * 2;
+        const lungePhase = clamp(lungePingPong, 0, 1);
+        const lungeEase = lungePhase * lungePhase * (3 - 2 * lungePhase);
+        const lungeAmount = lungeProgress > 0 ? lungeEase * enemy.attackLungeDistance : 0;
+        const lungeOffsetX = enemy.attackLungeDx * lungeAmount;
+        const lungeOffsetY = enemy.attackLungeDy * lungeAmount;
+        const enemyAttackShake = enemy.attackLungeUntil > now ? 1 - (enemy.attackLungeUntil - now) / ATTACK_LUNGE_DURATION_MS : 0;
+        const enemyHitShake = enemy.hitFlashUntil > now ? clamp((enemy.hitFlashUntil - now) / 130, 0, 1) : 0;
+        const enemyShakeStrength = clamp(Math.max(enemyAttackShake * 0.6, enemyHitShake * 0.45), 0, 1);
+        const enemyShakeX = enemyShakeStrength > 0 ? Math.sin(now * 0.22 + enemy.tileX * 1.7) * 1.05 * enemyShakeStrength : 0;
+        const enemyShakeY = enemyShakeStrength > 0 ? Math.cos(now * 0.27 + enemy.tileY * 1.3) * 0.5 * enemyShakeStrength : 0;
+        const deathProgress = enemy.deathStartedAt > 0 ? clamp((now - enemy.deathStartedAt) / ENEMY_DEATH_DURATION_MS, 0, 1) : 0;
+        const deathAlpha = 1 - deathProgress;
+        const spawnProgress = enemy.spawnFxUntil > now ? 1 - (enemy.spawnFxUntil - now) / ENEMY_SPAWN_PORTAL_MS : 1;
+        const selected = selectedEnemyIdRef.current === enemy.id;
+        const hpRatio = toHealthRatio(enemy.hp, enemy.maxHp);
+        const healthWidth = clamp(drawWidth * 0.62, 30, 84);
+        const healthX = centerX - healthWidth / 2;
+        const healthY = baseY - drawHeight - 11;
+
+        entities.push({
+          depth: baseY,
+          order: entityOrder,
+          draw: () => {
+            if (spawnProgress < 1 && enemy.deathStartedAt === 0) {
+              const portalRadius = 5 + spawnProgress * 10;
+              context.save();
+              context.globalAlpha = (1 - spawnProgress) * 0.75;
+              context.strokeStyle = "rgba(45, 212, 191, 0.88)";
+              context.lineWidth = 2;
+              context.beginPath();
+              context.ellipse(centerX, baseY - 2, portalRadius, portalRadius * 0.42, 0, 0, Math.PI * 2);
+              context.stroke();
+              context.restore();
+            }
+
+            drawSpriteShadow(
+              context,
+              sprite,
+              centerX + lungeOffsetX + enemyShakeX,
+              baseY + lungeOffsetY + enemyShakeY,
+              drawWidth,
+              drawHeight,
+              enemy.facingX * baseFlip,
+              0.15 + shadowPulse,
+            );
+
+            context.save();
+            context.globalAlpha = deathAlpha;
+            context.translate(centerX + lungeOffsetX + enemyShakeX, baseY - bobY + lungeOffsetY + enemyShakeY - deathProgress * 8);
+            context.scale(enemy.facingX * baseFlip, 1);
+            if (deathProgress > 0) {
+              const collapse = 1 - deathProgress * 0.08;
+              context.scale(collapse, collapse);
+            }
+            if (sprite) {
+              context.drawImage(sprite, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+              if (enemy.hitFlashUntil > now) {
+                const flash = clamp((enemy.hitFlashUntil - now) / 130, 0, 1);
+                context.globalAlpha = flash * 0.7;
+                context.filter = "sepia(1) saturate(8) hue-rotate(-35deg) brightness(0.95)";
+                context.drawImage(sprite, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+                context.filter = "none";
+              }
+
+              if (selected && enemy.deathStartedAt === 0) {
+                const radius = Math.max(drawWidth, drawHeight) * 0.5 + 6;
+                context.strokeStyle = "rgba(239, 68, 68, 0.98)";
+                context.lineWidth = 2.3;
+                context.setLineDash([9, 6]);
+                context.lineDashOffset = -(now / 30);
+                context.beginPath();
+                context.arc(0, -drawHeight * 0.52, radius, 0, Math.PI * 2);
+                context.stroke();
+                context.setLineDash([]);
+                context.lineDashOffset = 0;
+              }
+            } else {
+              context.fillStyle = "rgba(203, 213, 225, 0.85)";
+              context.fillRect(-6, -18, 12, 16);
+            }
+            context.restore();
+
+            context.save();
+            context.globalAlpha = 0.9 * deathAlpha;
+            context.fillStyle = "rgba(15, 23, 42, 0.72)";
+            context.fillRect(healthX, healthY, healthWidth, 4);
+            context.fillStyle = hpRatio > 0.45 ? "rgba(52, 211, 153, 0.95)" : hpRatio > 0.2 ? "rgba(251, 191, 36, 0.95)" : "rgba(248, 113, 113, 0.95)";
+            context.fillRect(healthX, healthY, healthWidth * hpRatio, 4);
+            if (selected) {
+              context.strokeStyle = "rgba(239, 68, 68, 0.95)";
+              context.lineWidth = 1;
+              context.strokeRect(healthX - 0.5, healthY - 0.5, healthWidth + 1, 5);
+            }
+            context.restore();
+          },
+        });
+        entityOrder += 1;
+      }
+
+      const playerSpriteWidth =
+        playerSprite && "width" in playerSprite && typeof playerSprite.width === "number" && playerSprite.width > 0
+          ? playerSprite.width
+          : TILE_SIZE;
+      const playerSpriteHeight =
+        playerSprite && "height" in playerSprite && typeof playerSprite.height === "number" && playerSprite.height > 0
+          ? playerSprite.height
+          : TILE_SIZE;
+      const spriteBaseUnit = TILE_SIZE / Math.max(playerSpriteWidth, playerSpriteHeight);
+      const spriteBaseWidth = playerSpriteWidth * spriteBaseUnit * playerRef.current.scaleX;
+      const spriteBaseHeight = playerSpriteHeight * spriteBaseUnit * playerRef.current.scaleY;
+      const playerCenterX = playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2;
+      const playerBaseY = playerRef.current.renderY * TILE_SIZE + TILE_SIZE;
       const moveWave = Math.sin(moveT * Math.PI);
-      const bobY = playerRef.current.moving ? Math.abs(moveWave) * 2.2 : 0;
-      const shadowPulse = playerRef.current.moving ? Math.abs(moveWave) * 0.05 : 0;
+      const playerBobY = playerRef.current.moving ? Math.abs(moveWave) * 2.2 : 0;
+      const playerShadowPulse = playerRef.current.moving ? Math.abs(moveWave) * 0.05 : 0;
+      const playerLungeProgress = playerRef.current.attackLungeUntil > now ? 1 - (playerRef.current.attackLungeUntil - now) / ATTACK_LUNGE_DURATION_MS : 0;
+      const playerLungePingPong = playerLungeProgress < 0.5 ? playerLungeProgress * 2 : (1 - playerLungeProgress) * 2;
+      const playerLungePhase = clamp(playerLungePingPong, 0, 1);
+      const playerLungeEase = playerLungePhase * playerLungePhase * (3 - 2 * playerLungePhase);
+      const playerLungeAmount = playerLungeProgress > 0 ? playerLungeEase * playerRef.current.attackLungeDistance : 0;
+      const playerLungeOffsetX = playerRef.current.attackLungeDx * playerLungeAmount;
+      const playerLungeOffsetY = playerRef.current.attackLungeDy * playerLungeAmount;
+      const playerAttackShake = playerRef.current.attackLungeUntil > now ? 1 - (playerRef.current.attackLungeUntil - now) / ATTACK_LUNGE_DURATION_MS : 0;
+      const playerHitShake = playerRef.current.hitFlashUntil > now ? clamp((playerRef.current.hitFlashUntil - now) / 130, 0, 1) : 0;
+      const playerShakeStrength = clamp(Math.max(playerAttackShake * 0.6, playerHitShake * 0.45), 0, 1);
+      const playerShakeX = playerShakeStrength > 0 ? Math.sin(now * 0.23 + 0.4) * 1.1 * playerShakeStrength : 0;
+      const playerShakeY = playerShakeStrength > 0 ? Math.cos(now * 0.29 + 0.7) * 0.52 * playerShakeStrength : 0;
+      const playerHpRatio = toHealthRatio(playerRef.current.hp, playerRef.current.maxHp);
+      const playerHealthWidth = clamp(spriteBaseWidth * 0.6, 36, 92);
+      const playerHealthX = playerCenterX - playerHealthWidth / 2;
+      const playerHealthY = playerBaseY - spriteBaseHeight - 11;
 
-      context.fillStyle = `rgba(0, 0, 0, ${0.22 + shadowPulse})`;
-      context.beginPath();
-      context.ellipse(
-        centerX,
-        baseY - 2,
-        (spriteBaseWidth * (0.22 - shadowPulse * 0.4)) / 2,
-        (TILE_SIZE * 0.22) / 2,
-        0,
-        0,
-        Math.PI * 2,
-      );
-      context.fill();
+      entities.push({
+        depth: playerBaseY,
+        order: entityOrder,
+        draw: () => {
+          drawSpriteShadow(
+            context,
+            playerSprite,
+            playerCenterX + playerLungeOffsetX + playerShakeX,
+            playerBaseY + playerLungeOffsetY + playerShakeY,
+            spriteBaseWidth,
+            spriteBaseHeight,
+            playerRef.current.facingX * spriteBaseFlipRef.current,
+            0.17 + playerShadowPulse,
+          );
 
-      context.save();
-      context.translate(centerX, baseY - bobY);
-      context.scale(playerRef.current.facingX * spriteBaseFlipRef.current, 1);
-      if (sprite) {
-        context.drawImage(sprite, -spriteBaseWidth / 2, -spriteBaseHeight, spriteBaseWidth, spriteBaseHeight);
-      } else {
-        context.fillStyle = "#ffffff";
+          context.save();
+          context.translate(playerCenterX + playerLungeOffsetX + playerShakeX, playerBaseY - playerBobY + playerLungeOffsetY + playerShakeY);
+          context.scale(playerRef.current.facingX * spriteBaseFlipRef.current, 1);
+          if (playerSprite) {
+            context.drawImage(playerSprite, -spriteBaseWidth / 2, -spriteBaseHeight, spriteBaseWidth, spriteBaseHeight);
+            if (playerRef.current.hitFlashUntil > now) {
+              const flash = clamp((playerRef.current.hitFlashUntil - now) / 130, 0, 1);
+              context.globalAlpha = flash * 0.68;
+              context.filter = "sepia(1) saturate(8) hue-rotate(-35deg) brightness(0.95)";
+              context.drawImage(playerSprite, -spriteBaseWidth / 2, -spriteBaseHeight, spriteBaseWidth, spriteBaseHeight);
+              context.filter = "none";
+            }
+          } else {
+            context.fillStyle = "#ffffff";
+            context.beginPath();
+            context.arc(0, -spriteBaseHeight / 2, 10, 0, Math.PI * 2);
+            context.fill();
+          }
+          context.restore();
+
+          context.fillStyle = "rgba(15, 23, 42, 0.75)";
+          context.fillRect(playerHealthX, playerHealthY, playerHealthWidth, 4.5);
+          context.fillStyle =
+            playerHpRatio > 0.45 ? "rgba(74, 222, 128, 0.96)" : playerHpRatio > 0.2 ? "rgba(250, 204, 21, 0.96)" : "rgba(248, 113, 113, 0.96)";
+          context.fillRect(playerHealthX, playerHealthY, playerHealthWidth * playerHpRatio, 4.5);
+          context.strokeStyle = "rgba(226, 232, 240, 0.75)";
+          context.lineWidth = 1;
+          context.strokeRect(playerHealthX - 0.5, playerHealthY - 0.5, playerHealthWidth + 1, 5.5);
+        },
+      });
+
+      entities
+        .sort((left, right) => (left.depth === right.depth ? left.order - right.order : left.depth - right.depth))
+        .forEach((entity) => entity.draw());
+
+      attackEffectsRef.current = attackEffectsRef.current.filter((effect) => now - effect.createdAt < effect.ttlMs);
+      for (const effect of attackEffectsRef.current) {
+        const t = clamp((now - effect.createdAt) / effect.ttlMs, 0, 1);
+        const eased = t * t * (3 - 2 * t);
+        const impactX = effect.fromX + (effect.toX - effect.fromX) * (0.56 + eased * 0.08);
+        const impactY = effect.fromY + (effect.toY - effect.fromY) * (0.56 + eased * 0.08);
+        const trailX = effect.fromX + (effect.toX - effect.fromX) * (0.3 + eased * 0.18);
+        const trailY = effect.fromY + (effect.toY - effect.fromY) * (0.3 + eased * 0.18);
+        const alpha = 1 - t;
+        const strokeColor = effect.fromEnemy ? `rgba(251, 146, 60, ${0.55 * alpha})` : `rgba(248, 113, 113, ${0.58 * alpha})`;
+        const accentColor = effect.critical ? `rgba(253, 224, 71, ${alpha})` : strokeColor;
+        const angle = Math.atan2(effect.toY - effect.fromY, effect.toX - effect.fromX);
+        const slashLen = effect.critical ? 13 : 10;
+
+        context.save();
+        context.strokeStyle = effect.fromEnemy ? `rgba(253, 186, 116, ${0.32 * alpha})` : `rgba(252, 165, 165, ${0.35 * alpha})`;
+        context.lineWidth = effect.critical ? 2.1 : 1.5;
+        context.lineCap = "round";
         context.beginPath();
-        context.arc(0, -spriteBaseHeight / 2, 10, 0, Math.PI * 2);
-        context.fill();
+        context.moveTo(trailX, trailY);
+        context.lineTo(impactX, impactY);
+        context.stroke();
+
+        context.translate(impactX, impactY);
+        context.rotate(angle + Math.PI * 0.5);
+        context.strokeStyle = strokeColor;
+        context.lineWidth = effect.critical ? 2.4 : 1.8;
+        context.setLineDash(effect.critical ? [8, 6] : [6, 5]);
+        context.lineDashOffset = -(now / 24);
+        context.beginPath();
+        context.moveTo(-slashLen, -slashLen * 0.18);
+        context.lineTo(slashLen, slashLen * 0.18);
+        context.stroke();
+        context.setLineDash([]);
+        context.strokeStyle = accentColor;
+        context.lineWidth = effect.critical ? 2 : 1.4;
+        context.rotate(Math.PI / 2);
+        context.beginPath();
+        context.moveTo(-slashLen * 0.62, 0);
+        context.lineTo(slashLen * 0.62, 0);
+        context.stroke();
+
+        const burstRadius = (effect.critical ? 8.8 : 6.8) * (0.9 + (1 - Math.abs(0.5 - t) * 2) * 0.16);
+        context.strokeStyle = effect.fromEnemy ? `rgba(253, 186, 116, ${0.42 * alpha})` : `rgba(254, 202, 202, ${0.48 * alpha})`;
+        context.lineWidth = effect.critical ? 1.9 : 1.3;
+        context.beginPath();
+        context.arc(0, 0, burstRadius, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
       }
-      context.restore();
+
+      damageTextsRef.current = damageTextsRef.current.filter((text) => now - text.createdAt < text.ttlMs);
+      for (const text of damageTextsRef.current) {
+        const t = clamp((now - text.createdAt) / text.ttlMs, 0, 1);
+        const yOffset = 10 + t * 32;
+        const alpha = 1 - t;
+        const scale = 1 + (1 - t) * 0.28;
+        const content = `-${text.value}`;
+        context.save();
+        context.globalAlpha = alpha;
+        context.translate(text.x, text.y - yOffset);
+        context.scale(scale, scale);
+        context.font = text.critical ? "800 19px Geist, sans-serif" : "700 16px Geist, sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        const textColor = text.fromEnemy ? "rgba(252, 165, 165, 1)" : text.critical ? "rgba(253, 224, 71, 1)" : "rgba(248, 250, 252, 1)";
+        context.fillStyle = textColor;
+        context.strokeStyle = "rgba(2, 6, 23, 0.92)";
+        context.lineWidth = 4.6;
+        context.strokeText(content, 0, 0.5);
+        context.fillText(content, 0, 0.5);
+        context.restore();
+      }
 
       context.restore();
       frame = requestAnimationFrame(draw);
@@ -713,7 +2021,7 @@ export const ExplorarPage = () => {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [mapData, persistState, tryStartMove]);
+  }, [buildNavigationCollisionLayer, cancelTracking, isWalkableForPlayer, mapData, persistState, pushAttackEffect, pushDamageText, tryStartMove]);
 
   return (
     <section className="space-y-4">
@@ -731,10 +2039,37 @@ export const ExplorarPage = () => {
         className="h-[74vh] min-h-[520px] w-full rounded-md border bg-black/30"
         onPointerDown={(event) => {
           if (event.button !== 0) return;
+          const world = pointerToWorld(event);
+          const tile = pointerToTile(event);
+          if (world) {
+            const enemy = findEnemyAtWorldPoint(world.x, world.y) ?? (tile ? findEnemyAtTile(tile) : null);
+            if (enemy) {
+              mouseHeldRef.current = false;
+              routeRef.current = [];
+              routeAllowsCornerCutRef.current = false;
+              selectedEnemyIdRef.current = enemy.id;
+              playerRef.current.trackingEnemyId = enemy.id;
+              playerRef.current.nextTrackingPathAt = 0;
+              engagedEnemyIdRef.current = enemy.id;
+              for (const runtimeEnemy of enemiesRef.current) {
+                if (runtimeEnemy.id !== enemy.id) {
+                  runtimeEnemy.aggroUntilAt = 0;
+                  runtimeEnemy.route = [];
+                }
+              }
+              enemy.aggroUntilAt = performance.now() + ENEMY_AGGRO_DURATION_MS;
+              return;
+            }
+          }
+
+          cancelTracking();
+          if (portalPromptRef.current && !teleportingRef.current) {
+            suppressPortalPromptUntilLeaveRef.current = true;
+            setPortalPrompt(null);
+          }
           mouseHeldRef.current = true;
-          const point = pointerToTile(event);
-          hoverTargetRef.current = point;
-          recalculatePath(point);
+          hoverTargetRef.current = tile;
+          recalculatePath(tile);
         }}
         onPointerMove={(event) => {
           const point = pointerToTile(event);
@@ -756,6 +2091,39 @@ export const ExplorarPage = () => {
           hoverTargetRef.current = null;
         }}
       />
+
+      <Dialog
+        open={Boolean(portalPrompt)}
+        onOpenChange={(open) => {
+          if (!open && !teleporting) {
+            suppressPortalPromptUntilLeaveRef.current = true;
+            setPortalPrompt(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Atravessar portal</DialogTitle>
+            <DialogDescription>Deseja ir para o proximo mapa?</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={teleporting}
+              onClick={() => {
+                suppressPortalPromptUntilLeaveRef.current = true;
+                setPortalPrompt(null);
+              }}
+            >
+              Nao
+            </Button>
+            <Button disabled={teleporting || !portalPrompt} onClick={() => void confirmPortalTeleport()}>
+              {teleporting ? "Indo..." : "Sim"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 };
+

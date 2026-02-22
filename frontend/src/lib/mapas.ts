@@ -16,6 +16,13 @@ export const updateActiveState = async (payload: Pick<PlayerMapState, "tileX" | 
   return response.state;
 };
 
+export const usePortal = async (portalId: string) => {
+  return apiRequest<ActiveMapPayload>("/mapas/teleportar", {
+    method: "POST",
+    body: JSON.stringify({ portalId }),
+  });
+};
+
 export const listMaps = async () => {
   const response = await apiRequest<{ maps: GameMapListItem[] }>("/mapas", {
     method: "GET",

@@ -3,6 +3,7 @@ import { AppError } from "../../lib/errors";
 import {
   createMapSchema,
   mapIdParamsSchema,
+  usePortalSchema,
   updateActiveMapStateSchema,
   updateMapAssetsSchema,
   updateMapLayoutSchema,
@@ -34,6 +35,20 @@ export class MapController {
       const input = updateActiveMapStateSchema.parse(request.body);
       const state = await this.mapService.updateActiveState(request.authUserId, input);
       response.status(200).json({ state });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  usePortal = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const input = usePortalSchema.parse(request.body);
+      const payload = await this.mapService.usePortal(request.authUserId, input);
+      response.status(200).json(payload);
     } catch (error) {
       next(error);
     }

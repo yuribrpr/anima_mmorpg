@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-type EditorTab = "mapa_base" | "colisoes" | "inimigos";
+type EditorTab = "mapa_base" | "colisoes" | "inimigos" | "portais";
 type EditorTool = "navigate" | "add" | "erase";
 type EnemyAreaMode = "spawn" | "movement";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -32,6 +32,10 @@ const generateEnemySpawnId = () =>
   typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `enemy_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+const generatePortalId = () =>
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `portal_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 
 const getEnemyColor = (seed: string) => {
   let hash = 0;
@@ -46,6 +50,12 @@ const getEnemyColor = (seed: string) => {
     subtle: `hsla(${hue}, 70%, 52%, 0.12)`,
   };
 };
+
+const normalizeMap = (map: GameMap): GameMap => ({
+  ...map,
+  enemySpawns: map.enemySpawns ?? [],
+  portals: (map as { portals?: GameMap["portals"] }).portals ?? [],
+});
 
 export const AdminMapasPage = () => {
   const [maps, setMaps] = useState<GameMap[]>([]);
@@ -64,9 +74,9 @@ export const AdminMapasPage = () => {
   const [selectedEnemySpawnId, setSelectedEnemySpawnId] = useState<string | null>(null);
   const [newEnemyBestiaryId, setNewEnemyBestiaryId] = useState<string>("");
   const [enemyAreaMode, setEnemyAreaMode] = useState<EnemyAreaMode>("spawn");
+  const [selectedPortalId, setSelectedPortalId] = useState<string | null>(null);
+  const [newPortalTargetMapId, setNewPortalTargetMapId] = useState<string>("");
 
-  const [layoutDirty, setLayoutDirty] = useState(false);
-  const [assetsDirty, setAssetsDirty] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const panRef = useRef({ x: 20, y: 20 });
@@ -79,10 +89,16 @@ export const AdminMapasPage = () => {
     panY: 0,
   });
   const paintRef = useRef(false);
+  const lastPaintedTileKeyRef = useRef<string | null>(null);
   const hoverTileRef = useRef<{ x: number; y: number } | null>(null);
   const backgroundImageRef = useRef<HTMLImageElement | null>(null);
   const editorSurfaceRef = useRef<HTMLDivElement | null>(null);
   const spacePressedRef = useRef(false);
+  const mapDraftRef = useRef<GameMap | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const saveInFlightRef = useRef(false);
+  const queuedSaveRef = useRef(false);
+  const dirtyFlagsRef = useRef<{ layout: boolean; assets: boolean }>({ layout: false, assets: false });
 
   const saveStatusLabel = useMemo(() => {
     if (saveStatus === "saving") return "Salvando...";
@@ -93,7 +109,8 @@ export const AdminMapasPage = () => {
 
   const refreshMaps = useCallback(async () => {
     const items = await listMaps();
-    const detailed = await Promise.all(items.map((item) => getMapById(item.id)));
+    const detailedRaw = await Promise.all(items.map((item) => getMapById(item.id)));
+    const detailed = detailedRaw.map(normalizeMap);
     setMaps(detailed);
     if (!selectedMapId && detailed.length > 0) {
       setSelectedMapId(detailed.find((item) => item.isActive)?.id ?? detailed[0].id);
@@ -136,16 +153,35 @@ export const AdminMapasPage = () => {
     const loadMap = async () => {
       try {
         const map = await getMapById(selectedMapId);
+        const normalizedMap = normalizeMap(map);
         if (!mounted) return;
-        setMapDraft(map);
+        setMapDraft(normalizedMap);
         setSelectedEnemySpawnId((current) => {
-          if (current && map.enemySpawns.some((item) => item.id === current)) {
+          if (current && normalizedMap.enemySpawns.some((item) => item.id === current)) {
             return current;
           }
-          return map.enemySpawns[0]?.id ?? null;
+          return normalizedMap.enemySpawns[0]?.id ?? null;
         });
-        setLayoutDirty(false);
-        setAssetsDirty(false);
+        setSelectedPortalId((current) => {
+          if (current && normalizedMap.portals.some((item) => item.id === current)) {
+            return current;
+          }
+          return normalizedMap.portals[0]?.id ?? null;
+        });
+        setNewPortalTargetMapId((current) => {
+          if (current) {
+            return current;
+          }
+          const fallback = maps.find((item) => item.id !== normalizedMap.id) ?? null;
+          return fallback?.id ?? "";
+        });
+        dirtyFlagsRef.current = { layout: false, assets: false };
+        saveInFlightRef.current = false;
+        queuedSaveRef.current = false;
+        if (saveTimerRef.current !== null) {
+          window.clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
         setSaveStatus("idle");
         setErrorMessage(null);
       } catch (error) {
@@ -162,7 +198,7 @@ export const AdminMapasPage = () => {
     return () => {
       mounted = false;
     };
-  }, [selectedMapId]);
+  }, [maps, selectedMapId]);
 
   useEffect(() => {
     if (!mapDraft?.backgroundImageData) {
@@ -176,49 +212,154 @@ export const AdminMapasPage = () => {
   }, [mapDraft?.backgroundImageData]);
 
   useEffect(() => {
-    if (!mapDraft || (!layoutDirty && !assetsDirty)) return;
+    mapDraftRef.current = mapDraft;
+  }, [mapDraft]);
 
-    setSaveStatus("saving");
-    const timeout = window.setTimeout(async () => {
-      try {
-        if (!mapDraft) return;
+  useEffect(() => {
+    if (!mapDraft || bestiaryAnimas.length === 0 || mapDraft.enemySpawns.length === 0) {
+      return;
+    }
 
-        if (assetsDirty) {
-          await saveMapAssets(mapDraft.id, {
-            backgroundImageData: mapDraft.backgroundImageData,
-            tilePalette: mapDraft.tilePalette,
-          });
-        }
-
-        if (layoutDirty) {
-          await saveMapLayout(mapDraft.id, {
-            tileLayer: mapDraft.tileLayer,
-            collisionLayer: mapDraft.collisionLayer,
-            enemySpawns: mapDraft.enemySpawns,
-            spawnX: mapDraft.spawnX,
-            spawnY: mapDraft.spawnY,
-            backgroundScale: mapDraft.backgroundScale,
-          });
-        }
-
-        setLayoutDirty(false);
-        setAssetsDirty(false);
-        setSaveStatus("saved");
-        await refreshMaps();
-      } catch (error) {
-        if (error instanceof ApiError) {
-          setErrorMessage(error.message);
-        } else {
-          setErrorMessage("Falha ao salvar mapa automaticamente.");
-        }
-        setSaveStatus("error");
+    const bestiaryMap = new Map(bestiaryAnimas.map((item) => [item.id, item]));
+    let changed = false;
+    const hydrated = mapDraft.enemySpawns.map((group) => {
+      const source = bestiaryMap.get(group.bestiaryAnimaId);
+      if (!source) {
+        return group;
       }
-    }, 700);
 
-    return () => {
-      clearTimeout(timeout);
-    };
-  }, [assetsDirty, layoutDirty, mapDraft, refreshMaps]);
+      const next = {
+        ...group,
+        bestiaryName: source.name ?? group.bestiaryName ?? null,
+        imageData: source.imageData ?? group.imageData ?? null,
+        spriteScale: source.spriteScale > 0 ? source.spriteScale : group.spriteScale > 0 ? group.spriteScale : 3,
+        flipHorizontal: source.flipHorizontal ?? group.flipHorizontal ?? true,
+        movementSpeed: group.movementSpeed > 0 ? group.movementSpeed : 2.2,
+      };
+
+      if (
+        next.bestiaryName !== group.bestiaryName ||
+        next.imageData !== group.imageData ||
+        next.spriteScale !== group.spriteScale ||
+        next.flipHorizontal !== group.flipHorizontal ||
+        next.movementSpeed !== group.movementSpeed
+      ) {
+        changed = true;
+      }
+      return next;
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    setMapDraft((current) => (current ? { ...current, enemySpawns: hydrated } : current));
+  }, [bestiaryAnimas, mapDraft]);
+
+  const flushAutosave = useCallback(async () => {
+    if (saveInFlightRef.current) {
+      queuedSaveRef.current = true;
+      return;
+    }
+
+    const snapshot = mapDraftRef.current;
+    if (!snapshot) {
+      return;
+    }
+
+    const shouldSaveLayout = dirtyFlagsRef.current.layout;
+    const shouldSaveAssets = dirtyFlagsRef.current.assets;
+    if (!shouldSaveLayout && !shouldSaveAssets) {
+      return;
+    }
+
+    saveInFlightRef.current = true;
+    queuedSaveRef.current = false;
+    dirtyFlagsRef.current = { layout: false, assets: false };
+    setSaveStatus("saving");
+
+    try {
+      if (shouldSaveAssets) {
+        await saveMapAssets(snapshot.id, {
+          backgroundImageData: snapshot.backgroundImageData,
+          tilePalette: snapshot.tilePalette,
+        });
+      }
+
+      if (shouldSaveLayout) {
+        const compactEnemySpawns = snapshot.enemySpawns.map((group) => ({
+          id: group.id,
+          bestiaryAnimaId: group.bestiaryAnimaId,
+          bestiaryName: group.bestiaryName ?? null,
+          imageData: null,
+          spriteScale: group.spriteScale,
+          flipHorizontal: group.flipHorizontal,
+          spawnCount: group.spawnCount,
+          respawnSeconds: group.respawnSeconds,
+          movementSpeed: group.movementSpeed,
+          spawnArea: group.spawnArea,
+          movementArea: group.movementArea,
+        }));
+        const compactPortals = snapshot.portals.map((portal) => ({
+          id: portal.id,
+          targetMapId: portal.targetMapId,
+          targetMapName: portal.targetMapName ?? null,
+          targetSpawnX: portal.targetSpawnX,
+          targetSpawnY: portal.targetSpawnY,
+          area: portal.area,
+        }));
+        await saveMapLayout(snapshot.id, {
+          tileLayer: snapshot.tileLayer,
+          collisionLayer: snapshot.collisionLayer,
+          enemySpawns: compactEnemySpawns,
+          portals: compactPortals,
+          spawnX: snapshot.spawnX,
+          spawnY: snapshot.spawnY,
+          backgroundScale: snapshot.backgroundScale,
+        });
+      }
+
+      setSaveStatus(dirtyFlagsRef.current.layout || dirtyFlagsRef.current.assets ? "saving" : "saved");
+    } catch (error) {
+      dirtyFlagsRef.current.layout ||= shouldSaveLayout;
+      dirtyFlagsRef.current.assets ||= shouldSaveAssets;
+      if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("Falha ao salvar mapa automaticamente.");
+      }
+      setSaveStatus("error");
+    } finally {
+      saveInFlightRef.current = false;
+
+      if (dirtyFlagsRef.current.layout || dirtyFlagsRef.current.assets || queuedSaveRef.current) {
+        if (saveTimerRef.current !== null) {
+          window.clearTimeout(saveTimerRef.current);
+        }
+        saveTimerRef.current = window.setTimeout(() => {
+          void flushAutosave();
+        }, 300);
+      }
+    }
+  }, []);
+
+  const scheduleAutosave = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      void flushAutosave();
+    }, 450);
+  }, [flushAutosave]);
+
+  useEffect(
+    () => () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -257,9 +398,23 @@ export const AdminMapasPage = () => {
       }
       if (event.key === "2") {
         event.preventDefault();
-        setTool("add");
+        if (tab === "inimigos") {
+          setEnemyAreaMode("spawn");
+          setTool("add");
+        } else {
+          setTool("add");
+        }
       }
       if (event.key === "3") {
+        event.preventDefault();
+        if (tab === "inimigos") {
+          setEnemyAreaMode("movement");
+          setTool("add");
+        } else {
+          setTool("erase");
+        }
+      }
+      if (event.key === "4" && tab === "inimigos") {
         event.preventDefault();
         setTool("erase");
       }
@@ -282,21 +437,53 @@ export const AdminMapasPage = () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [isCanvasFocused]);
+  }, [isCanvasFocused, tab]);
 
   const updateMapDraft = (updater: (current: GameMap) => GameMap, markLayout: boolean, markAssets = false) => {
     setMapDraft((current) => {
       if (!current) return current;
       return updater(current);
     });
-    if (markLayout) setLayoutDirty(true);
-    if (markAssets) setAssetsDirty(true);
+    if (markLayout) {
+      dirtyFlagsRef.current.layout = true;
+    }
+    if (markAssets) {
+      dirtyFlagsRef.current.assets = true;
+    }
+    if (markLayout || markAssets) {
+      setSaveStatus("saving");
+      scheduleAutosave();
+    }
   };
 
   const selectedEnemySpawn = useMemo(
     () => mapDraft?.enemySpawns.find((item) => item.id === selectedEnemySpawnId) ?? null,
     [mapDraft?.enemySpawns, selectedEnemySpawnId],
   );
+
+  const selectedPortal = useMemo(
+    () => mapDraft?.portals.find((item) => item.id === selectedPortalId) ?? null,
+    [mapDraft?.portals, selectedPortalId],
+  );
+
+  const availablePortalTargets = useMemo(
+    () => maps.filter((item) => item.id !== mapDraft?.id),
+    [mapDraft?.id, maps],
+  );
+
+  useEffect(() => {
+    if (!availablePortalTargets.length) {
+      setNewPortalTargetMapId("");
+      return;
+    }
+
+    setNewPortalTargetMapId((current) => {
+      if (current && availablePortalTargets.some((item) => item.id === current)) {
+        return current;
+      }
+      return availablePortalTargets[0]?.id ?? "";
+    });
+  }, [availablePortalTargets]);
 
   const handleAddEnemySpawn = () => {
     if (!mapDraft || !newEnemyBestiaryId) {
@@ -311,8 +498,13 @@ export const AdminMapasPage = () => {
     const nextConfig = {
       id: generateEnemySpawnId(),
       bestiaryAnimaId: bestiary.id,
+      bestiaryName: bestiary.name,
+      imageData: bestiary.imageData,
+      spriteScale: bestiary.spriteScale ?? 3,
+      flipHorizontal: bestiary.flipHorizontal ?? true,
       spawnCount: 3,
       respawnSeconds: 15,
+      movementSpeed: 2.2,
       spawnArea: createEmptyBooleanLayer(),
       movementArea: createEmptyBooleanLayer(),
     };
@@ -353,6 +545,61 @@ export const AdminMapasPage = () => {
     );
   };
 
+  const handleAddPortal = () => {
+    if (!mapDraft) {
+      return;
+    }
+
+    const targetMap = maps.find((item) => item.id === newPortalTargetMapId) ?? maps.find((item) => item.id !== mapDraft.id) ?? null;
+    if (!targetMap) {
+      return;
+    }
+
+    const nextPortal = {
+      id: generatePortalId(),
+      targetMapId: targetMap.id,
+      targetMapName: targetMap.name,
+      targetSpawnX: targetMap.spawnX,
+      targetSpawnY: targetMap.spawnY,
+      area: createEmptyBooleanLayer(),
+    };
+
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        portals: [...current.portals, nextPortal],
+      }),
+      true,
+    );
+    setSelectedPortalId(nextPortal.id);
+    setTool("add");
+  };
+
+  const handleRemovePortal = (id: string) => {
+    const remaining = (mapDraft?.portals ?? []).filter((item) => item.id !== id);
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        portals: current.portals.filter((item) => item.id !== id),
+      }),
+      true,
+    );
+    setSelectedPortalId((current) => (current === id ? remaining[0]?.id ?? null : current));
+  };
+
+  const updatePortalConfig = (
+    id: string,
+    updater: (portal: NonNullable<typeof selectedPortal>) => NonNullable<typeof selectedPortal>,
+  ) => {
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        portals: current.portals.map((item) => (item.id === id ? updater(item) : item)),
+      }),
+      true,
+    );
+  };
+
   const worldTileFromPointer = (event: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current;
     if (!canvas || !mapDraft) return null;
@@ -373,6 +620,22 @@ export const AdminMapasPage = () => {
     const half = Math.floor(brushSize / 2);
 
     if (tab === "colisoes") {
+      const willAdd = tool === "add";
+      let shouldMutate = false;
+      for (let dy = -half; dy <= half; dy += 1) {
+        for (let dx = -half; dx <= half; dx += 1) {
+          const x = center.x + dx;
+          const y = center.y + dy;
+          if (x < 0 || x >= mapDraft.cols || y < 0 || y >= mapDraft.rows) continue;
+          if (mapDraft.collisionLayer[y]?.[x] !== willAdd) {
+            shouldMutate = true;
+            break;
+          }
+        }
+        if (shouldMutate) break;
+      }
+      if (!shouldMutate) return;
+
       updateMapDraft(
         (current) => {
           const next = { ...current };
@@ -393,29 +656,108 @@ export const AdminMapasPage = () => {
       return;
     }
 
-    if (tab !== "inimigos" || !selectedEnemySpawnId) {
-      return;
-    }
-
-    updateEnemySpawnConfig(selectedEnemySpawnId, (config) => {
-      const nextSpawnArea = cloneMatrix(config.spawnArea);
-      const nextMovementArea = cloneMatrix(config.movementArea);
-      const layer = enemyAreaMode === "spawn" ? nextSpawnArea : nextMovementArea;
+    if (tab === "inimigos") {
+      if (!selectedEnemySpawnId) {
+        return;
+      }
+      const selectedConfig = mapDraft.enemySpawns.find((item) => item.id === selectedEnemySpawnId);
+      if (!selectedConfig) {
+        return;
+      }
+      let shouldMutate = false;
       for (let dy = -half; dy <= half; dy += 1) {
         for (let dx = -half; dx <= half; dx += 1) {
           const x = center.x + dx;
           const y = center.y + dy;
           if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) continue;
-          layer[y][x] = tool === "add";
+          if (tool === "erase") {
+            if (selectedConfig.spawnArea[y]?.[x] || selectedConfig.movementArea[y]?.[x]) {
+              shouldMutate = true;
+              break;
+            }
+          } else if (enemyAreaMode === "spawn") {
+            if (!selectedConfig.spawnArea[y]?.[x]) {
+              shouldMutate = true;
+              break;
+            }
+          } else if (!selectedConfig.movementArea[y]?.[x]) {
+            shouldMutate = true;
+            break;
+          }
         }
+        if (shouldMutate) break;
       }
+      if (!shouldMutate) return;
 
-      return {
-        ...config,
-        spawnArea: nextSpawnArea,
-        movementArea: nextMovementArea,
-      };
-    });
+      updateEnemySpawnConfig(selectedEnemySpawnId, (config) => {
+        const nextSpawnArea = cloneMatrix(config.spawnArea);
+        const nextMovementArea = cloneMatrix(config.movementArea);
+        for (let dy = -half; dy <= half; dy += 1) {
+          for (let dx = -half; dx <= half; dx += 1) {
+            const x = center.x + dx;
+            const y = center.y + dy;
+            if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) continue;
+            if (tool === "erase") {
+              nextSpawnArea[y][x] = false;
+              nextMovementArea[y][x] = false;
+            } else if (enemyAreaMode === "spawn") {
+              nextSpawnArea[y][x] = true;
+            } else {
+              nextMovementArea[y][x] = true;
+            }
+          }
+        }
+
+        return {
+          ...config,
+          spawnArea: nextSpawnArea,
+          movementArea: nextMovementArea,
+        };
+      });
+      return;
+    }
+
+    if (tab === "portais") {
+      if (!selectedPortalId) {
+        return;
+      }
+      const selectedPortalConfig = mapDraft.portals.find((item) => item.id === selectedPortalId);
+      if (!selectedPortalConfig) {
+        return;
+      }
+      const willAdd = tool === "add";
+      let shouldMutate = false;
+      for (let dy = -half; dy <= half; dy += 1) {
+        for (let dx = -half; dx <= half; dx += 1) {
+          const x = center.x + dx;
+          const y = center.y + dy;
+          if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) continue;
+          if (selectedPortalConfig.area[y]?.[x] !== willAdd) {
+            shouldMutate = true;
+            break;
+          }
+        }
+        if (shouldMutate) break;
+      }
+      if (!shouldMutate) return;
+
+      updatePortalConfig(selectedPortalId, (portal) => {
+        const nextArea = cloneMatrix(portal.area);
+        for (let dy = -half; dy <= half; dy += 1) {
+          for (let dx = -half; dx <= half; dx += 1) {
+            const x = center.x + dx;
+            const y = center.y + dy;
+            if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) continue;
+            nextArea[y][x] = tool === "add";
+          }
+        }
+
+        return {
+          ...portal,
+          area: nextArea,
+        };
+      });
+    }
   };
 
   const zoomTo = (nextZoom: number, anchorX?: number, anchorY?: number) => {
@@ -525,6 +867,41 @@ export const AdminMapasPage = () => {
         }
       }
 
+      if (tab === "portais") {
+        const now = performance.now();
+        for (const portal of map.portals) {
+          const isSelected = portal.id === selectedPortalId;
+          const phase = (Math.sin(now / 260) + 1) * 0.5;
+          const pulse = 0.4 + phase * 0.6;
+
+          context.fillStyle = isSelected ? "rgba(99, 102, 241, 0.24)" : "rgba(99, 102, 241, 0.14)";
+          context.strokeStyle = isSelected ? "rgba(129, 140, 248, 0.82)" : "rgba(129, 140, 248, 0.5)";
+          context.lineWidth = 1;
+          const portalCenters: Array<{ x: number; y: number }> = [];
+          for (let y = 0; y < map.rows; y += 1) {
+            for (let x = 0; x < map.cols; x += 1) {
+              if (!portal.area[y]?.[x]) continue;
+              const tileX = x * TILE_SIZE;
+              const tileY = y * TILE_SIZE;
+              context.fillRect(tileX, tileY, TILE_SIZE, TILE_SIZE);
+              context.strokeRect(tileX + 0.5, tileY + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+              portalCenters.push({ x: tileX + TILE_SIZE / 2, y: tileY + TILE_SIZE / 2 });
+            }
+          }
+
+          context.save();
+          context.setLineDash([5, 4]);
+          context.lineDashOffset = -(now / 45);
+          for (const center of portalCenters) {
+            context.beginPath();
+            context.strokeStyle = isSelected ? `rgba(129, 140, 248, ${0.46 + pulse * 0.38})` : `rgba(129, 140, 248, ${0.28 + pulse * 0.2})`;
+            context.arc(center.x, center.y, 3.4 + pulse * 2.4, 0, Math.PI * 2);
+            context.stroke();
+          }
+          context.restore();
+        }
+      }
+
       context.strokeStyle = "rgba(255,255,255,0.15)";
       context.lineWidth = 1;
       for (let x = 0; x <= GRID_COLS; x += 1) {
@@ -578,6 +955,19 @@ export const AdminMapasPage = () => {
         }
       }
 
+      if (tab === "portais" && hoverTileRef.current && tool !== "navigate" && selectedPortalId) {
+        const half = Math.floor(brushSize / 2);
+        context.fillStyle = tool === "add" ? "rgba(129, 140, 248, 0.28)" : "rgba(239, 68, 68, 0.25)";
+        for (let dy = -half; dy <= half; dy += 1) {
+          for (let dx = -half; dx <= half; dx += 1) {
+            const x = hoverTileRef.current.x + dx;
+            const y = hoverTileRef.current.y + dy;
+            if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) continue;
+            context.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+
       context.restore();
       frame = requestAnimationFrame(draw);
     };
@@ -586,7 +976,7 @@ export const AdminMapasPage = () => {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [brushSize, enemyAreaMode, mapDraft, selectedEnemySpawnId, tab, tool]);
+  }, [brushSize, enemyAreaMode, mapDraft, selectedEnemySpawnId, selectedPortalId, tab, tool]);
 
   const handleCreateMap = async () => {
     if (newMapName.trim().length < 2) return;
@@ -631,6 +1021,7 @@ export const AdminMapasPage = () => {
   };
 
   const activeMapName = maps.find((item) => item.id === selectedMapId)?.name ?? "-";
+  const selectedPortalTargetMap = selectedPortal ? maps.find((item) => item.id === selectedPortal.targetMapId) ?? null : null;
 
   return (
     <section className="space-y-5">
@@ -701,6 +1092,9 @@ export const AdminMapasPage = () => {
             <Button variant={tab === "inimigos" ? "default" : "outline"} onClick={() => setTab("inimigos")}>
               Inimigos
             </Button>
+            <Button variant={tab === "portais" ? "default" : "outline"} onClick={() => setTab("portais")}>
+              Portais
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -724,11 +1118,45 @@ export const AdminMapasPage = () => {
               <Button variant={tool === "navigate" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("navigate")}>
                 <Hand className="h-4 w-4" /> 1 Navegar
               </Button>
-              <Button variant={tool === "add" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("add")}>
-                <Brush className="h-4 w-4" /> 2 Desenhar area
+              <Button
+                variant={tool === "add" && enemyAreaMode === "spawn" ? "default" : "outline"}
+                size="sm"
+                className="gap-2"
+                onClick={() => {
+                  setEnemyAreaMode("spawn");
+                  setTool("add");
+                }}
+              >
+                <Brush className="h-4 w-4" /> 2 Desenhar Spawn
+              </Button>
+              <Button
+                variant={tool === "add" && enemyAreaMode === "movement" ? "default" : "outline"}
+                size="sm"
+                className="gap-2"
+                onClick={() => {
+                  setEnemyAreaMode("movement");
+                  setTool("add");
+                }}
+              >
+                <Brush className="h-4 w-4" /> 3 Desenhar Movimentacao
               </Button>
               <Button variant={tool === "erase" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("erase")}>
-                <Eraser className="h-4 w-4" /> 3 Apagar area
+                <Eraser className="h-4 w-4" /> 4 Apagar
+              </Button>
+              <Badge variant="secondary">ESC volta para navegar</Badge>
+            </div>
+          ) : null}
+
+          {tab === "portais" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant={tool === "navigate" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("navigate")}>
+                <Hand className="h-4 w-4" /> 1 Navegar
+              </Button>
+              <Button variant={tool === "add" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("add")}>
+                <Brush className="h-4 w-4" /> 2 Desenhar portal
+              </Button>
+              <Button variant={tool === "erase" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("erase")}>
+                <Eraser className="h-4 w-4" /> 3 Apagar portal
               </Button>
               <Badge variant="secondary">ESC volta para navegar</Badge>
             </div>
@@ -736,33 +1164,35 @@ export const AdminMapasPage = () => {
 
           <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
             <div className="space-y-4">
-              <label className="block text-sm">
-                Escala da imagem base
-                <Input
-                  type="number"
-                  min={0.1}
-                  max={5}
-                  step={0.1}
-                  value={mapDraft?.backgroundScale ?? 1}
-                  onChange={(event) =>
-                    updateMapDraft(
-                      (current) => ({ ...current, backgroundScale: clamp(Number(event.target.value) || 1, 0.1, 5) }),
-                      true,
-                    )
-                  }
-                />
-              </label>
-
-              <label className="block text-sm">
-                Upload imagem base
-                <Input type="file" accept="image/*" onChange={(event) => void handleBackgroundUpload(event.target.files?.[0] ?? null)} />
-              </label>
-
               {tab === "mapa_base" ? (
-                <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                  <p className="mb-1 font-medium text-foreground">Mapa Base</p>
-                  <p>Ajuste apenas a imagem (upload e escala), mantendo a grade fixa.</p>
-                </div>
+                <>
+                  <label className="block text-sm">
+                    Escala da imagem base
+                    <Input
+                      type="number"
+                      min={0.1}
+                      max={5}
+                      step={0.1}
+                      value={mapDraft?.backgroundScale ?? 1}
+                      onChange={(event) =>
+                        updateMapDraft(
+                          (current) => ({ ...current, backgroundScale: clamp(Number(event.target.value) || 1, 0.1, 5) }),
+                          true,
+                        )
+                      }
+                    />
+                  </label>
+
+                  <label className="block text-sm">
+                    Upload imagem base
+                    <Input type="file" accept="image/*" onChange={(event) => void handleBackgroundUpload(event.target.files?.[0] ?? null)} />
+                  </label>
+
+                  <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                    <p className="mb-1 font-medium text-foreground">Mapa Base</p>
+                    <p>Ajuste apenas a imagem (upload e escala), mantendo a grade fixa.</p>
+                  </div>
+                </>
               ) : null}
 
               {tab === "colisoes" ? (
@@ -797,6 +1227,18 @@ export const AdminMapasPage = () => {
 
               {tab === "inimigos" ? (
                 <div className="space-y-4">
+                  <label className="block text-sm">
+                    Tamanho do pincel
+                    <Input
+                      type="number"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={brushSize}
+                      onChange={(event) => setBrushSize(clamp(Number(event.target.value) || 1, 1, 5))}
+                    />
+                  </label>
+
                   <div className="space-y-2 rounded-md border bg-muted/20 p-3">
                     <p className="text-sm font-medium">Adicionar inimigo</p>
                     <select
@@ -828,19 +1270,20 @@ export const AdminMapasPage = () => {
                               className={`rounded-md border p-2 ${selectedEnemySpawnId === group.id ? "border-primary bg-primary/10" : "border-border"}`}
                             >
                               <div className="flex items-center justify-between gap-2">
-                                <button
-                                  type="button"
-                                  className="text-left text-sm font-medium"
-                                  onClick={() => setSelectedEnemySpawnId(group.id)}
-                                >
-                                  {bestiary?.name ?? "Inimigo removido"}
+                                <button type="button" className="flex items-center gap-2 text-left text-sm font-medium" onClick={() => setSelectedEnemySpawnId(group.id)}>
+                                  {group.imageData ? (
+                                    <img src={group.imageData} alt={bestiary?.name ?? group.bestiaryName ?? "Inimigo"} className="h-7 w-7 rounded border object-cover" />
+                                  ) : (
+                                    <div className="h-7 w-7 rounded border bg-muted" />
+                                  )}
+                                  <span>{bestiary?.name ?? group.bestiaryName ?? "Inimigo removido"}</span>
                                 </button>
                                 <Button type="button" variant="ghost" size="sm" onClick={() => handleRemoveEnemySpawn(group.id)}>
                                   Remover
                                 </Button>
                               </div>
                               <p className="text-xs text-muted-foreground">
-                                Spawn {group.spawnCount} | Respawn {group.respawnSeconds}s
+                                Spawn {group.spawnCount} | Respawn {group.respawnSeconds}s | Vel. {(group.movementSpeed ?? 2.2).toFixed(1)} t/s
                               </p>
                             </div>
                           );
@@ -888,43 +1331,188 @@ export const AdminMapasPage = () => {
                         />
                       </label>
 
-                      <div className="space-y-2">
-                        <p className="text-xs uppercase text-muted-foreground">Area que o pincel edita</p>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={enemyAreaMode === "spawn" ? "default" : "outline"}
-                            onClick={() => setEnemyAreaMode("spawn")}
-                          >
-                            Area de Spawn
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={enemyAreaMode === "movement" ? "default" : "outline"}
-                            onClick={() => setEnemyAreaMode("movement")}
-                          >
-                            Area de Movimentacao
-                          </Button>
-                        </div>
-                      </div>
-
                       <label className="block text-sm">
-                        Tamanho do pincel
+                        Velocidade de movimentacao (tiles/segundo)
                         <Input
                           type="number"
-                          min={1}
-                          max={5}
-                          step={1}
-                          value={brushSize}
-                          onChange={(event) => setBrushSize(clamp(Number(event.target.value) || 1, 1, 5))}
+                          min={0.25}
+                          step={0.1}
+                          value={selectedEnemySpawn.movementSpeed ?? 2.2}
+                          onChange={(event) => {
+                            const parsed = Number(event.target.value);
+                            const next = Math.max(0.25, Number.isFinite(parsed) ? parsed : 2.2);
+                            updateEnemySpawnConfig(selectedEnemySpawn.id, (config) => ({
+                              ...config,
+                              movementSpeed: Number(next.toFixed(2)),
+                            }));
+                          }}
                         />
                       </label>
                     </div>
                   ) : (
                     <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
                       <p>Selecione ou adicione um grupo de inimigos para desenhar as areas.</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {tab === "portais" ? (
+                <div className="space-y-4">
+                  <label className="block text-sm">
+                    Tamanho do pincel
+                    <Input
+                      type="number"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={brushSize}
+                      onChange={(event) => setBrushSize(clamp(Number(event.target.value) || 1, 1, 5))}
+                    />
+                  </label>
+
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <p className="text-sm font-medium">Adicionar portal</p>
+                    <select
+                      className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                      value={newPortalTargetMapId}
+                      onChange={(event) => setNewPortalTargetMapId(event.target.value)}
+                    >
+                      <option value="">Selecione o mapa de destino</option>
+                      {availablePortalTargets.map((map) => (
+                        <option key={map.id} value={map.id}>
+                          {map.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button className="w-full" onClick={handleAddPortal} disabled={!newPortalTargetMapId}>
+                      Adicionar portal
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <p className="text-sm font-medium">Portais no mapa</p>
+                    <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+                      {mapDraft?.portals.length ? (
+                        mapDraft.portals.map((portal) => (
+                          <div
+                            key={portal.id}
+                            className={`rounded-md border p-2 ${selectedPortalId === portal.id ? "border-primary bg-primary/10" : "border-border"}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                className="text-left text-sm font-medium"
+                                onClick={() => setSelectedPortalId(portal.id)}
+                              >
+                                Portal {portal.id.slice(0, 8)}
+                              </button>
+                              <Button type="button" variant="ghost" size="sm" onClick={() => handleRemovePortal(portal.id)}>
+                                Remover
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Destino: {maps.find((item) => item.id === portal.targetMapId)?.name ?? portal.targetMapName ?? "Mapa removido"}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Nenhum portal configurado.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedPortal ? (
+                    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+                      <p className="text-sm font-medium">Configuracao do portal</p>
+                      <label className="block text-sm">
+                        Mapa de destino
+                        <select
+                          className="mt-1 h-9 w-full rounded-md border bg-background px-3 text-sm"
+                          value={selectedPortal.targetMapId}
+                          onChange={(event) => {
+                            const target = maps.find((item) => item.id === event.target.value) ?? null;
+                            if (!target) return;
+                            updatePortalConfig(selectedPortal.id, (portal) => ({
+                              ...portal,
+                              targetMapId: target.id,
+                              targetMapName: target.name,
+                              targetSpawnX: target.spawnX,
+                              targetSpawnY: target.spawnY,
+                            }));
+                          }}
+                        >
+                          {availablePortalTargets.map((map) => (
+                            <option key={map.id} value={map.id}>
+                              {map.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block text-sm">
+                          Spawn X
+                          <Input
+                            type="number"
+                            min={0}
+                            max={GRID_COLS - 1}
+                            step={1}
+                            value={selectedPortal.targetSpawnX}
+                            onChange={(event) =>
+                              updatePortalConfig(selectedPortal.id, (portal) => ({
+                                ...portal,
+                                targetSpawnX: clamp(Math.floor(Number(event.target.value) || 0), 0, GRID_COLS - 1),
+                              }))
+                            }
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          Spawn Y
+                          <Input
+                            type="number"
+                            min={0}
+                            max={GRID_ROWS - 1}
+                            step={1}
+                            value={selectedPortal.targetSpawnY}
+                            onChange={(event) =>
+                              updatePortalConfig(selectedPortal.id, (portal) => ({
+                                ...portal,
+                                targetSpawnY: clamp(Math.floor(Number(event.target.value) || 0), 0, GRID_ROWS - 1),
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+
+                      <div className="rounded-md border bg-background p-2">
+                        <p className="mb-2 text-xs font-medium text-foreground">Preview de destino</p>
+                        <div className="relative h-36 overflow-hidden rounded border bg-black/30">
+                          {selectedPortalTargetMap?.backgroundImageData ? (
+                            <img
+                              src={selectedPortalTargetMap.backgroundImageData}
+                              alt={`Preview ${selectedPortalTargetMap.name}`}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Mapa sem imagem base</div>
+                          )}
+                          <div
+                            className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-yellow-100 bg-yellow-400/90 shadow-[0_0_10px_rgba(250,204,21,0.65)]"
+                            style={{
+                              left: `${((selectedPortal.targetSpawnX + 0.5) / GRID_COLS) * 100}%`,
+                              top: `${((selectedPortal.targetSpawnY + 0.5) / GRID_ROWS) * 100}%`,
+                            }}
+                          />
+                        </div>
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Destino: ({selectedPortal.targetSpawnX}, {selectedPortal.targetSpawnY}) em {selectedPortalTargetMap?.name ?? selectedPortal.targetMapName ?? "-"}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                      <p>Selecione um portal para editar destino e preview de spawn.</p>
                     </div>
                   )}
                 </div>
@@ -967,6 +1555,7 @@ export const AdminMapasPage = () => {
                   setIsCanvasFocused(true);
                   const tile = worldTileFromPointer(event);
                   hoverTileRef.current = tile;
+                  lastPaintedTileKeyRef.current = null;
                   if (!mapDraft) return;
 
                   if (tool === "navigate" || event.button === 1 || event.shiftKey || spacePressedRef.current) {
@@ -988,7 +1577,9 @@ export const AdminMapasPage = () => {
 
                   if (!tile || tab === "mapa_base") return;
                   if (tab === "inimigos" && !selectedEnemySpawnId) return;
+                  if (tab === "portais" && !selectedPortalId) return;
                   paintRef.current = true;
+                  lastPaintedTileKeyRef.current = `${tile.x}:${tile.y}`;
                   applyBrush(tile);
                 }}
                 onPointerMove={(event) => {
@@ -1001,16 +1592,23 @@ export const AdminMapasPage = () => {
                   }
 
                   if (paintRef.current && tile && tab !== "mapa_base") {
+                    const tileKey = `${tile.x}:${tile.y}`;
+                    if (lastPaintedTileKeyRef.current === tileKey) {
+                      return;
+                    }
+                    lastPaintedTileKeyRef.current = tileKey;
                     applyBrush(tile);
                   }
                 }}
                 onPointerUp={() => {
                   dragRef.current.active = false;
                   paintRef.current = false;
+                  lastPaintedTileKeyRef.current = null;
                 }}
                 onPointerLeave={() => {
                   dragRef.current.active = false;
                   paintRef.current = false;
+                  lastPaintedTileKeyRef.current = null;
                   hoverTileRef.current = null;
                 }}
                 onWheel={(event) => {

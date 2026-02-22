@@ -1,0 +1,2 @@
+ALTER TABLE GameMap
+ADD COLUMN portals JSON NULL;
