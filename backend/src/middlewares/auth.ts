@@ -1,4 +1,4 @@
-﻿import { NextFunction, Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
 import { getEnv } from "../config/env";
 import { AppError } from "../lib/errors";
 import { verifyAuthToken } from "../lib/jwt";
@@ -13,6 +13,7 @@ export const authMiddleware = (request: Request, _response: Response, next: Next
   try {
     const payload = verifyAuthToken(token);
     request.authUserId = payload.sub;
+    request.authUserRole = payload.role;
     next();
   } catch {
     throw new AppError(401, "UNAUTHORIZED", "Invalid session");

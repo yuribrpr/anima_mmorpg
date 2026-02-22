@@ -29,11 +29,13 @@ class InMemoryUserRepository {
     }
     async create(data) {
         const now = new Date();
+        const role = data.role ?? "PLAYER";
         const user = {
             id: `user_${this.users.size + 1}`,
             email: data.email,
             username: data.username,
             passwordHash: data.passwordHash,
+            role,
             createdAt: now,
             updatedAt: now,
         };

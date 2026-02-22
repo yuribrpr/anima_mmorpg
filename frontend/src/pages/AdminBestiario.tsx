@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { POWER_LEVEL_OPTIONS, type PowerLevel } from "@/types/anima";
 import type { BestiaryAnima, CreateBestiaryAnimaInput } from "@/types/bestiary-anima";
+import { ImageCropFlipField } from "@/components/common/ImageCropFlipField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +29,8 @@ const bestiarySchema = z.object({
   defense: z.number().int().min(1),
   maxHp: z.number().int().min(1),
   imageData: z.string().nullable(),
+  spriteScale: z.number().positive(),
+  flipHorizontal: z.boolean(),
   powerLevel: z.enum(["ROOKIE", "CHAMPION", "ULTIMATE", "MEGA", "BURST_MODE"]),
 });
 
@@ -42,6 +45,8 @@ const defaultValues: BestiaryFormValues = {
   defense: 58,
   maxHp: 520,
   imageData: null,
+  spriteScale: 3,
+  flipHorizontal: true,
   powerLevel: "ROOKIE",
 };
 
@@ -56,21 +61,10 @@ const toPayload = (values: BestiaryFormValues): CreateBestiaryAnimaInput => ({
   defense: values.defense,
   maxHp: values.maxHp,
   imageData: values.imageData,
+  spriteScale: values.spriteScale,
+  flipHorizontal: values.flipHorizontal,
   powerLevel: values.powerLevel,
 });
-
-const readImage = async (file: File | null) => {
-  if (!file) {
-    return null;
-  }
-
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Falha ao carregar imagem"));
-    reader.readAsDataURL(file);
-  });
-};
 
 export const AdminBestiarioPage = () => {
   const [animas, setAnimas] = useState<BestiaryAnima[]>([]);
@@ -172,6 +166,8 @@ export const AdminBestiarioPage = () => {
       defense: anima.defense,
       maxHp: anima.maxHp,
       imageData: anima.imageData,
+      spriteScale: anima.spriteScale ?? 3,
+      flipHorizontal: anima.flipHorizontal ?? true,
       powerLevel: anima.powerLevel,
     });
     setOpenEditModal(true);
@@ -370,18 +366,49 @@ export const AdminBestiarioPage = () => {
                   />
                 </div>
 
-                <FormItem>
-                  <FormLabel>Imagem (Upload local)</FormLabel>
-                  <Input
-                    type="file"
-                    accept="image/*"
-                    onChange={(event) => {
-                      void readImage(event.target.files?.[0] ?? null).then((imageData) => {
-                        form.setValue("imageData", imageData);
-                      });
-                    }}
-                  />
-                </FormItem>
+                <ImageCropFlipField
+                  value={form.watch("imageData")}
+                  flipHorizontalValue={form.watch("flipHorizontal")}
+                  onFlipHorizontalChange={(flipHorizontal) =>
+                    form.setValue("flipHorizontal", flipHorizontal, {
+                      shouldDirty: true,
+                      shouldTouch: true,
+                      shouldValidate: true,
+                    })
+                  }
+                  onChange={(imageData) =>
+                    form.setValue("imageData", imageData, {
+                      shouldDirty: true,
+                      shouldTouch: true,
+                      shouldValidate: true,
+                    })
+                  }
+                  label="Imagem (Upload local)"
+                />
+                <FormField
+                  control={form.control}
+                  name="spriteScale"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Escala do Sprite</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          step={0.1}
+                          inputMode="decimal"
+                          value={field.value}
+                          onChange={(event) => {
+                            const parsed = Number(event.target.value.replace(",", "."));
+                            field.onChange(Number.isFinite(parsed) ? parsed : field.value);
+                          }}
+                          onBlur={() => field.onChange(Math.max(0.1, field.value))}
+                        />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground">Padrao 3x. Sem limite maximo.</p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
                 <DialogFooter>
                   <Button type="submit" disabled={form.formState.isSubmitting}>
@@ -552,18 +579,49 @@ export const AdminBestiarioPage = () => {
                 />
               </div>
 
-              <FormItem>
-                <FormLabel>Imagem (Upload local)</FormLabel>
-                <Input
-                  type="file"
-                  accept="image/*"
-                  onChange={(event) => {
-                    void readImage(event.target.files?.[0] ?? null).then((imageData) => {
-                      editForm.setValue("imageData", imageData);
-                    });
-                  }}
-                />
-              </FormItem>
+              <ImageCropFlipField
+                value={editForm.watch("imageData")}
+                flipHorizontalValue={editForm.watch("flipHorizontal")}
+                onFlipHorizontalChange={(flipHorizontal) =>
+                  editForm.setValue("flipHorizontal", flipHorizontal, {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: true,
+                  })
+                }
+                onChange={(imageData) =>
+                  editForm.setValue("imageData", imageData, {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: true,
+                  })
+                }
+                label="Imagem (Upload local)"
+              />
+              <FormField
+                control={editForm.control}
+                name="spriteScale"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Escala do Sprite</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        step={0.1}
+                        inputMode="decimal"
+                        value={field.value}
+                        onChange={(event) => {
+                          const parsed = Number(event.target.value.replace(",", "."));
+                          field.onChange(Number.isFinite(parsed) ? parsed : field.value);
+                        }}
+                        onBlur={() => field.onChange(Math.max(0.1, field.value))}
+                      />
+                    </FormControl>
+                    <p className="text-xs text-muted-foreground">Padrao 3x. Sem limite maximo.</p>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <DialogFooter>
                 <Button type="submit" disabled={editForm.formState.isSubmitting}>

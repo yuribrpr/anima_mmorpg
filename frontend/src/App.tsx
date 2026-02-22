@@ -1,4 +1,4 @@
-﻿import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { BrowserRouter } from "react-router-dom";
 import { AuthProvider } from "@/contexts/auth-context";
 import { useAuth } from "@/contexts/use-auth";
@@ -7,6 +7,8 @@ import { ProtectedLayout } from "@/components/layout/ProtectedLayout";
 import { AdocaoPage } from "@/pages/Adocao";
 import { AdminAnimasPage } from "@/pages/AdminAnimas";
 import { AdminBestiarioPage } from "@/pages/AdminBestiario";
+import { AdminMapasPage } from "@/pages/AdminMapas";
+import { ExplorarPage } from "@/pages/Explorar";
 import { InventarioPage } from "@/pages/Inventario";
 import { LoginPage } from "@/pages/Login";
 import { RegisterPage } from "@/pages/Register";
@@ -19,7 +21,25 @@ const PublicOnlyRoute = () => {
   }
 
   if (user) {
-    return <Navigate to="/app/inventario" replace />;
+    return <Navigate to="/app/explorar" replace />;
+  }
+
+  return <Outlet />;
+};
+
+const AdminOnlyRoute = () => {
+  const { user, status } = useAuth();
+
+  if (status === "loading") {
+    return <FullPageLoader label="Validando permissões..." />;
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (user.role !== "ADMIN") {
+    return <Navigate to="/app/explorar" replace />;
   }
 
   return <Outlet />;
@@ -33,14 +53,19 @@ const AppRoutes = () => (
     </Route>
 
     <Route element={<ProtectedLayout />}>
-      <Route path="/app" element={<Navigate to="/app/inventario" replace />} />
+      <Route path="/app" element={<Navigate to="/app/explorar" replace />} />
+      <Route path="/app/explorar" element={<ExplorarPage />} />
       <Route path="/app/adocao" element={<AdocaoPage />} />
       <Route path="/app/inventario" element={<InventarioPage />} />
-      <Route path="/app/admin/animas" element={<AdminAnimasPage />} />
-      <Route path="/app/admin/bestiario" element={<AdminBestiarioPage />} />
+
+      <Route element={<AdminOnlyRoute />}>
+        <Route path="/app/admin/mapas" element={<AdminMapasPage />} />
+        <Route path="/app/admin/animas" element={<AdminAnimasPage />} />
+        <Route path="/app/admin/bestiario" element={<AdminBestiarioPage />} />
+      </Route>
     </Route>
 
-    <Route path="*" element={<Navigate to="/app/inventario" replace />} />
+    <Route path="*" element={<Navigate to="/app/explorar" replace />} />
   </Routes>
 );
 

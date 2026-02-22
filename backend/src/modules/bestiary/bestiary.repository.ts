@@ -10,6 +10,8 @@ export type CreateBestiaryAnimaData = {
   defense: number;
   maxHp: number;
   imageData: string | null;
+  spriteScale: number;
+  flipHorizontal: boolean;
   powerLevel: PowerLevel;
   bitsDrop: number;
   xpDrop: number;

@@ -30,6 +30,8 @@ export class InMemoryAnimaRepository implements AnimaRepository {
       defense: data.defense,
       maxHp: data.maxHp,
       imageData: data.imageData,
+      spriteScale: data.spriteScale,
+      flipHorizontal: data.flipHorizontal,
       powerLevel: data.powerLevel as PowerLevel,
       nextEvolutionId: data.nextEvolutionId,
       nextEvolution: nextEvolution
@@ -67,6 +69,8 @@ export class InMemoryAnimaRepository implements AnimaRepository {
       defense: data.defense,
       maxHp: data.maxHp,
       imageData: data.imageData,
+      spriteScale: data.spriteScale,
+      flipHorizontal: data.flipHorizontal,
       powerLevel: data.powerLevel as PowerLevel,
       nextEvolutionId: data.nextEvolutionId,
       nextEvolution: nextEvolution

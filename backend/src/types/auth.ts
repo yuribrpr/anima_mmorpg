@@ -1,7 +1,10 @@
-﻿export type AuthUser = {
+export type UserRole = "PLAYER" | "ADMIN";
+
+export type AuthUser = {
   id: string;
   username: string;
   email: string;
+  role: UserRole;
 };
 
 export type RegisterInput = {

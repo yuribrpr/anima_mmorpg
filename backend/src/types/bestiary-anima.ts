@@ -9,6 +9,8 @@ export type CreateBestiaryAnimaInput = {
   defense: number;
   maxHp: number;
   imageData?: string | null;
+  spriteScale?: number;
+  flipHorizontal?: boolean;
   powerLevel: PowerLevel;
 };
 

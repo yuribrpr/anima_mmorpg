@@ -16,6 +16,8 @@ export type AnimaOutput = {
   defense: number;
   maxHp: number;
   imageData: string | null;
+  spriteScale: number;
+  flipHorizontal: boolean;
   powerLevel: PowerLevel;
   nextEvolutionId: string | null;
   nextEvolution: AnimaReference | null;
@@ -32,6 +34,8 @@ export type CreateAnimaInput = {
   defense: number;
   maxHp: number;
   imageData?: string | null;
+  spriteScale?: number;
+  flipHorizontal?: boolean;
   powerLevel: PowerLevel;
   nextEvolutionId?: string | null;
 };

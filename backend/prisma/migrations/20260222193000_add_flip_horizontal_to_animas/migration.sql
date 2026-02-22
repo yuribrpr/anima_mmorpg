@@ -1,0 +1,5 @@
+ALTER TABLE `Anima`
+ADD COLUMN `flipHorizontal` BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE `BestiaryAnima`
+ADD COLUMN `flipHorizontal` BOOLEAN NOT NULL DEFAULT true;

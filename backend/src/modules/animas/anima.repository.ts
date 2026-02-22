@@ -14,6 +14,8 @@ export type CreateAnimaData = {
   defense: number;
   maxHp: number;
   imageData: string | null;
+  spriteScale: number;
+  flipHorizontal: boolean;
   powerLevel: PowerLevel;
   nextEvolutionId: string | null;
 };

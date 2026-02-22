@@ -1,4 +1,4 @@
-﻿import { AppError } from "../../lib/errors";
+import { AppError } from "../../lib/errors";
 import { signAuthToken } from "../../lib/jwt";
 import { hashPassword, verifyPassword } from "../../lib/password";
 import { AuthUser, LoginInput, RegisterInput } from "../../types/auth";
@@ -8,6 +8,7 @@ const toAuthUser = (user: UserEntity): AuthUser => ({
   id: user.id,
   username: user.username,
   email: user.email,
+  role: user.role,
 });
 
 export class AuthService {
@@ -31,7 +32,7 @@ export class AuthService {
       passwordHash,
     });
 
-    const token = signAuthToken(user.id);
+    const token = signAuthToken(user.id, user.role);
     return {
       user: toAuthUser(user),
       token,
@@ -50,7 +51,7 @@ export class AuthService {
       throw new AppError(401, "INVALID_CREDENTIALS", "Invalid credentials");
     }
 
-    const token = signAuthToken(user.id);
+    const token = signAuthToken(user.id, user.role);
     return {
       user: toAuthUser(user),
       token,

@@ -1,8 +1,10 @@
 import request from "supertest";
+import { hashPassword } from "../../src/lib/password";
 import { createApp } from "../../src/app";
 import { InMemoryAnimaRepository } from "../helpers/in-memory-anima-repository.ts";
 import { InMemoryAdoptionRepository } from "../helpers/in-memory-adoption-repository.ts";
 import { InMemoryBestiaryAnimaRepository } from "../helpers/in-memory-bestiary-anima-repository.ts";
+import { InMemoryMapRepository } from "../helpers/in-memory-map-repository.ts";
 import { InMemoryUserRepository } from "../helpers/in-memory-user-repository.ts";
 
 describe("adocoes integration", () => {
@@ -10,9 +12,10 @@ describe("adocoes integration", () => {
   const animaRepository = new InMemoryAnimaRepository();
   const bestiaryAnimaRepository = new InMemoryBestiaryAnimaRepository();
   const adoptionRepository = new InMemoryAdoptionRepository(animaRepository);
-  const app = createApp({ userRepository, animaRepository, bestiaryAnimaRepository, adoptionRepository });
+  const mapRepository = new InMemoryMapRepository();
+  const app = createApp({ userRepository, animaRepository, bestiaryAnimaRepository, adoptionRepository, mapRepository });
 
-  const registerAndAuth = async () => {
+  const registerPlayerAgent = async () => {
     const authAgent = request.agent(app);
     const suffix = `${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 
@@ -26,14 +29,35 @@ describe("adocoes integration", () => {
     return authAgent;
   };
 
+  const loginAdminAgent = async () => {
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+    const email = `admin_adocoes_${suffix}@example.com`;
+    const username = `admin_${suffix}`.slice(0, 24);
+
+    await userRepository.create({
+      username,
+      email,
+      passwordHash: await hashPassword("password123"),
+      role: "ADMIN",
+    });
+
+    const authAgent = request.agent(app);
+    const loginResponse = await authAgent.post("/auth/login").send({
+      emailOrUsername: email,
+      password: "password123",
+    });
+    expect(loginResponse.status).toBe(200);
+    return authAgent;
+  };
+
   const createAnima = async (
-    agent: ReturnType<typeof request.agent>,
+    adminAgent: ReturnType<typeof request.agent>,
     input: {
       name: string;
       powerLevel: "ROOKIE" | "CHAMPION";
     },
   ) => {
-    const response = await agent.post("/animas").send({
+    const response = await adminAgent.post("/animas").send({
       name: input.name,
       attack: 80,
       attackSpeedSeconds: 1.2,
@@ -58,12 +82,13 @@ describe("adocoes integration", () => {
   });
 
   it("lists only rookie animas as adoption candidates", async () => {
-    const authAgent = await registerAndAuth();
+    const playerAgent = await registerPlayerAgent();
+    const adminAgent = await loginAdminAgent();
 
-    const rookieId = await createAnima(authAgent, { name: "Cubby", powerLevel: "ROOKIE" });
-    await createAnima(authAgent, { name: "Bladeon", powerLevel: "CHAMPION" });
+    const rookieId = await createAnima(adminAgent, { name: "Cubby", powerLevel: "ROOKIE" });
+    await createAnima(adminAgent, { name: "Bladeon", powerLevel: "CHAMPION" });
 
-    const response = await authAgent.get("/adocoes/candidatos");
+    const response = await playerAgent.get("/adocoes/candidatos");
 
     expect(response.status).toBe(200);
     const ids = response.body.animas.map((item: { id: string }) => item.id);
@@ -72,10 +97,11 @@ describe("adocoes integration", () => {
   });
 
   it("adopts and lists user inventory with derived totals", async () => {
-    const authAgent = await registerAndAuth();
-    const rookieId = await createAnima(authAgent, { name: "Piko", powerLevel: "ROOKIE" });
+    const playerAgent = await registerPlayerAgent();
+    const adminAgent = await loginAdminAgent();
+    const rookieId = await createAnima(adminAgent, { name: "Piko", powerLevel: "ROOKIE" });
 
-    const adoptResponse = await authAgent.post("/adocoes").send({
+    const adoptResponse = await playerAgent.post("/adocoes").send({
       animaId: rookieId,
       nickname: "Piko Guardiao",
     });
@@ -89,22 +115,23 @@ describe("adocoes integration", () => {
     expect(adoptResponse.body.anima.totalMaxHp).toBeGreaterThan(adoptResponse.body.anima.baseAnima.maxHp);
     expect(adoptResponse.body.anima.isPrimary).toBe(true);
 
-    const inventoryResponse = await authAgent.get("/adocoes");
+    const inventoryResponse = await playerAgent.get("/adocoes");
     expect(inventoryResponse.status).toBe(200);
     expect(inventoryResponse.body.animas.length).toBe(1);
     expect(inventoryResponse.body.animas[0].nickname).toBe("Piko Guardiao");
   });
 
   it("sets one adopted anima as primary", async () => {
-    const authAgent = await registerAndAuth();
-    const rookieA = await createAnima(authAgent, { name: "Rook A", powerLevel: "ROOKIE" });
-    const rookieB = await createAnima(authAgent, { name: "Rook B", powerLevel: "ROOKIE" });
+    const playerAgent = await registerPlayerAgent();
+    const adminAgent = await loginAdminAgent();
+    const rookieA = await createAnima(adminAgent, { name: "Rook A", powerLevel: "ROOKIE" });
+    const rookieB = await createAnima(adminAgent, { name: "Rook B", powerLevel: "ROOKIE" });
 
-    const firstAdoption = await authAgent.post("/adocoes").send({
+    const firstAdoption = await playerAgent.post("/adocoes").send({
       animaId: rookieA,
       nickname: "Primeiro",
     });
-    const secondAdoption = await authAgent.post("/adocoes").send({
+    const secondAdoption = await playerAgent.post("/adocoes").send({
       animaId: rookieB,
       nickname: "Segundo",
     });
@@ -112,12 +139,12 @@ describe("adocoes integration", () => {
     const firstId = firstAdoption.body.anima.id as string;
     const secondId = secondAdoption.body.anima.id as string;
 
-    const setPrimaryResponse = await authAgent.patch(`/adocoes/${secondId}/principal`).send();
+    const setPrimaryResponse = await playerAgent.patch(`/adocoes/${secondId}/principal`).send();
     expect(setPrimaryResponse.status).toBe(200);
     expect(setPrimaryResponse.body.anima.id).toBe(secondId);
     expect(setPrimaryResponse.body.anima.isPrimary).toBe(true);
 
-    const inventoryResponse = await authAgent.get("/adocoes");
+    const inventoryResponse = await playerAgent.get("/adocoes");
     expect(inventoryResponse.status).toBe(200);
 
     const first = inventoryResponse.body.animas.find((item: { id: string }) => item.id === firstId);

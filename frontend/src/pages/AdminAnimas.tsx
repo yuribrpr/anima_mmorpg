@@ -8,6 +8,7 @@ import { createAnima, deleteAnima, listAnimas, updateAnima } from "@/lib/animas"
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { POWER_LEVEL_OPTIONS, type Anima, type CreateAnimaInput, type PowerLevel } from "@/types/anima";
+import { ImageCropFlipField } from "@/components/common/ImageCropFlipField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +29,8 @@ const animaSchema = z.object({
   defense: z.number().int().min(1),
   maxHp: z.number().int().min(1),
   imageData: z.string().nullable(),
+  spriteScale: z.number().positive(),
+  flipHorizontal: z.boolean(),
   powerLevel: z.enum(["ROOKIE", "CHAMPION", "ULTIMATE", "MEGA", "BURST_MODE"]),
   nextEvolutionId: z.string().nullable(),
 });
@@ -43,6 +46,8 @@ const defaultFormValues: AnimaFormValues = {
   defense: 58,
   maxHp: 520,
   imageData: null,
+  spriteScale: 3,
+  flipHorizontal: true,
   powerLevel: "ROOKIE",
   nextEvolutionId: null,
 };
@@ -58,22 +63,11 @@ const toPayload = (values: AnimaFormValues): CreateAnimaInput => ({
   defense: values.defense,
   maxHp: values.maxHp,
   imageData: values.imageData,
+  spriteScale: values.spriteScale,
+  flipHorizontal: values.flipHorizontal,
   powerLevel: values.powerLevel,
   nextEvolutionId: values.nextEvolutionId,
 });
-
-const readImage = async (file: File | null) => {
-  if (!file) {
-    return null;
-  }
-
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Falha ao carregar imagem"));
-    reader.readAsDataURL(file);
-  });
-};
 
 const applyScaleToForm = (form: UseFormReturn<AnimaFormValues>, level: PowerLevel, setScalePercent: (value: number) => void) => {
   const scaled = getPowerScale(level);
@@ -266,18 +260,49 @@ const AnimaFormSection = ({
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <FormItem>
-          <FormLabel>Imagem (Upload local)</FormLabel>
-          <Input
-            type="file"
-            accept="image/*"
-            onChange={(event) => {
-              void readImage(event.target.files?.[0] ?? null).then((imageData) => {
-                form.setValue("imageData", imageData);
-              });
-            }}
-          />
-        </FormItem>
+        <ImageCropFlipField
+          value={form.watch("imageData")}
+          flipHorizontalValue={form.watch("flipHorizontal")}
+          onFlipHorizontalChange={(flipHorizontal) =>
+            form.setValue("flipHorizontal", flipHorizontal, {
+              shouldDirty: true,
+              shouldTouch: true,
+              shouldValidate: true,
+            })
+          }
+          onChange={(imageData) =>
+            form.setValue("imageData", imageData, {
+              shouldDirty: true,
+              shouldTouch: true,
+              shouldValidate: true,
+            })
+          }
+          label="Imagem (Upload local)"
+        />
+        <FormField
+          control={form.control}
+          name="spriteScale"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Escala do Sprite</FormLabel>
+              <FormControl>
+                <Input
+                  type="number"
+                  step={0.1}
+                  inputMode="decimal"
+                  value={field.value}
+                  onChange={(event) => {
+                    const parsed = Number(event.target.value.replace(",", "."));
+                    field.onChange(Number.isFinite(parsed) ? parsed : field.value);
+                  }}
+                  onBlur={() => field.onChange(Math.max(0.1, field.value))}
+                />
+              </FormControl>
+              <p className="text-xs text-muted-foreground">Padrao 3x. Sem limite maximo.</p>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
         <FormField
           control={form.control}
@@ -459,6 +484,8 @@ export const AdminAnimasPage = () => {
       defense: anima.defense,
       maxHp: anima.maxHp,
       imageData: anima.imageData,
+      spriteScale: anima.spriteScale ?? 3,
+      flipHorizontal: anima.flipHorizontal ?? true,
       powerLevel: anima.powerLevel,
       nextEvolutionId: anima.nextEvolutionId,
     });
@@ -638,6 +665,7 @@ export const AdminAnimasPage = () => {
                 <TableHead>Agilidade</TableHead>
                 <TableHead>Defesa</TableHead>
                 <TableHead>Vida Máx.</TableHead>
+                <TableHead>Escala</TableHead>
                 <TableHead>Próx. Evolução</TableHead>
                 <TableHead className="text-right">Ações</TableHead>
               </TableRow>
@@ -645,7 +673,7 @@ export const AdminAnimasPage = () => {
             <TableBody>
               {!loading && filteredAnimas.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center text-muted-foreground">
+                  <TableCell colSpan={12} className="text-center text-muted-foreground">
                     Nenhum Anima encontrado com os filtros selecionados.
                   </TableCell>
                 </TableRow>
@@ -670,6 +698,7 @@ export const AdminAnimasPage = () => {
                   <TableCell>{anima.agility}</TableCell>
                   <TableCell>{anima.defense}</TableCell>
                   <TableCell>{anima.maxHp}</TableCell>
+                  <TableCell>{(anima.spriteScale ?? 3).toFixed(1)}x</TableCell>
                   <TableCell>
                     {anima.nextEvolution ? (
                       <div className="flex items-center gap-2">

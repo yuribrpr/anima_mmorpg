@@ -9,6 +9,8 @@ export type AdoptionCandidateOutput = {
   id: string;
   name: string;
   imageData: string | null;
+  spriteScale: number;
+  flipHorizontal: boolean;
   powerLevel: PowerLevel;
   attack: number;
   attackSpeedSeconds: number;

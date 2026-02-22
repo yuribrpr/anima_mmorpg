@@ -1,10 +1,5 @@
-﻿import { UserEntity, UserRepository } from "../../src/modules/auth/auth.repository";
-
-type CreateData = {
-  username: string;
-  email: string;
-  passwordHash: string;
-};
+import { UserRole } from "../../src/types/auth";
+import { CreateUserData, UserEntity, UserRepository } from "../../src/modules/auth/auth.repository";
 
 export class InMemoryUserRepository implements UserRepository {
   private users = new Map<string, UserEntity>();
@@ -37,13 +32,15 @@ export class InMemoryUserRepository implements UserRepository {
     return this.users.get(id) ?? null;
   }
 
-  async create(data: CreateData) {
+  async create(data: CreateUserData) {
     const now = new Date();
+    const role: UserRole = data.role ?? "PLAYER";
     const user: UserEntity = {
       id: `user_${this.users.size + 1}`,
       email: data.email,
       username: data.username,
       passwordHash: data.passwordHash,
+      role,
       createdAt: now,
       updatedAt: now,
     };

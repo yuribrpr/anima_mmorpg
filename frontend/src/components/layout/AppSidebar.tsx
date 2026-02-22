@@ -1,7 +1,8 @@
 import type { ComponentType } from "react";
 import { useMemo } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { ChevronRight, FolderCog, LogOut, Shield, Sparkles, Swords } from "lucide-react";
+import { ChevronRight, Compass, FolderCog, LogOut, Shield, Sparkles, Swords } from "lucide-react";
+import type { UserRole } from "@/types/auth";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
 
 type SidebarProps = {
   username: string;
+  userRole: UserRole;
   onLogout: () => Promise<void>;
 };
 
@@ -20,11 +22,12 @@ type NavItem = {
 };
 
 const mainItems: NavItem[] = [
+  { label: "Explorar", icon: Compass, to: "/app/explorar" },
   { label: "Inventario", icon: Shield, to: "/app/inventario" },
   { label: "Adocao", icon: Sparkles, to: "/app/adocao" },
 ];
 
-const SidebarPanel = ({ username, onLogout, className }: SidebarProps & { className?: string }) => {
+const SidebarPanel = ({ username, userRole, onLogout, className }: SidebarProps & { className?: string }) => {
   const location = useLocation();
   const adminOpen = useMemo(() => location.pathname.startsWith("/app/admin"), [location.pathname]);
 
@@ -62,37 +65,49 @@ const SidebarPanel = ({ username, onLogout, className }: SidebarProps & { classN
           );
         })}
 
-        <Collapsible defaultOpen={adminOpen}>
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" className="group w-full justify-start gap-2 text-muted-foreground">
-              <ChevronRight className="h-4 w-4 transition-transform group-data-[state=open]:rotate-90" />
-              <FolderCog className="h-4 w-4" />
-              Administracao
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="ml-6 mt-1 space-y-1">
-            <Button
-              asChild
-              variant="ghost"
-              className={cn(
-                "w-full justify-start text-muted-foreground",
-                location.pathname === "/app/admin/animas" ? "bg-muted text-foreground" : undefined,
-              )}
-            >
-              <NavLink to="/app/admin/animas">Animas</NavLink>
-            </Button>
-            <Button
-              asChild
-              variant="ghost"
-              className={cn(
-                "w-full justify-start text-muted-foreground",
-                location.pathname === "/app/admin/bestiario" ? "bg-muted text-foreground" : undefined,
-              )}
-            >
-              <NavLink to="/app/admin/bestiario">Bestiario</NavLink>
-            </Button>
-          </CollapsibleContent>
-        </Collapsible>
+        {userRole === "ADMIN" ? (
+          <Collapsible defaultOpen={adminOpen}>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="group w-full justify-start gap-2 text-muted-foreground">
+                <ChevronRight className="h-4 w-4 transition-transform group-data-[state=open]:rotate-90" />
+                <FolderCog className="h-4 w-4" />
+                Administracao
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="ml-6 mt-1 space-y-1">
+              <Button
+                asChild
+                variant="ghost"
+                className={cn(
+                  "w-full justify-start text-muted-foreground",
+                  location.pathname === "/app/admin/mapas" ? "bg-muted text-foreground" : undefined,
+                )}
+              >
+                <NavLink to="/app/admin/mapas">Mapas</NavLink>
+              </Button>
+              <Button
+                asChild
+                variant="ghost"
+                className={cn(
+                  "w-full justify-start text-muted-foreground",
+                  location.pathname === "/app/admin/animas" ? "bg-muted text-foreground" : undefined,
+                )}
+              >
+                <NavLink to="/app/admin/animas">Animas</NavLink>
+              </Button>
+              <Button
+                asChild
+                variant="ghost"
+                className={cn(
+                  "w-full justify-start text-muted-foreground",
+                  location.pathname === "/app/admin/bestiario" ? "bg-muted text-foreground" : undefined,
+                )}
+              >
+                <NavLink to="/app/admin/bestiario">Bestiario</NavLink>
+              </Button>
+            </CollapsibleContent>
+          </Collapsible>
+        ) : null}
       </nav>
 
       <div className="mt-auto pt-4">
@@ -105,11 +120,11 @@ const SidebarPanel = ({ username, onLogout, className }: SidebarProps & { classN
   );
 };
 
-export const AppSidebar = ({ username, onLogout }: SidebarProps) => {
+export const AppSidebar = ({ username, userRole, onLogout }: SidebarProps) => {
   return (
     <>
       <div className="hidden lg:block">
-        <SidebarPanel username={username} onLogout={onLogout} className="min-h-screen" />
+        <SidebarPanel username={username} userRole={userRole} onLogout={onLogout} className="min-h-screen" />
       </div>
 
       <div className="border-b border-border p-4 lg:hidden">
@@ -124,7 +139,7 @@ export const AppSidebar = ({ username, onLogout }: SidebarProps) => {
               <SheetTitle>Navegacao</SheetTitle>
             </SheetHeader>
             <div className="mt-6">
-              <SidebarPanel username={username} onLogout={onLogout} className="w-full border-none p-0" />
+              <SidebarPanel username={username} userRole={userRole} onLogout={onLogout} className="w-full border-none p-0" />
             </div>
           </SheetContent>
         </Sheet>

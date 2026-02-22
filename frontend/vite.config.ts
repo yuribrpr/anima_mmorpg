@@ -31,6 +31,10 @@ export default defineConfig({
         target: "http://localhost:3000",
         changeOrigin: true,
       },
+      "/mapas": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
     },
   },
   test: {
@@ -38,6 +42,6 @@ export default defineConfig({
     globals: true,
     setupFiles: "./src/test/setup.ts",
     css: true,
-    include: ["src/test/**/*.test.tsx"],
+    include: ["src/test/**/*.test.ts", "src/test/**/*.test.tsx"],
   },
 });

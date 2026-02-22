@@ -56,6 +56,8 @@ export class AnimaService {
       defense: input.defense,
       maxHp: input.maxHp,
       imageData: input.imageData ?? null,
+      spriteScale: input.spriteScale ?? 3,
+      flipHorizontal: input.flipHorizontal ?? true,
       powerLevel: input.powerLevel,
       nextEvolutionId: input.nextEvolutionId ?? null,
     };

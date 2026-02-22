@@ -10,7 +10,9 @@ export const createBestiaryAnimaSchema = z.object({
   agility: z.number().int().min(1).max(9999),
   defense: z.number().int().min(1).max(9999),
   maxHp: z.number().int().min(1).max(999999),
-  imageData: z.string().max(2_000_000).nullable().optional(),
+  imageData: z.string().max(55_000_000).nullable().optional(),
+  spriteScale: z.number().positive().default(3),
+  flipHorizontal: z.boolean().default(true),
   powerLevel: powerLevelSchema,
 });
 

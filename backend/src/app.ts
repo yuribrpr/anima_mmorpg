@@ -1,4 +1,4 @@
-﻿import cookieParser from "cookie-parser";
+import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import { getEnv } from "./config/env";
@@ -12,12 +12,15 @@ import { createBestiaryAnimaRouter } from "./modules/bestiary/bestiary.routes";
 import { BestiaryAnimaRepository, PrismaBestiaryAnimaRepository } from "./modules/bestiary/bestiary.repository";
 import { createAuthRouter } from "./modules/auth/auth.routes";
 import { PrismaUserRepository, UserRepository } from "./modules/auth/auth.repository";
+import { createMapRouter } from "./modules/maps/map.routes";
+import { MapRepository, PrismaMapRepository } from "./modules/maps/map.repository";
 
 type AppDependencies = {
   userRepository?: UserRepository;
   animaRepository?: AnimaRepository;
   bestiaryAnimaRepository?: BestiaryAnimaRepository;
   adoptionRepository?: AdoptionRepository;
+  mapRepository?: MapRepository;
 };
 
 export const createApp = (dependencies: AppDependencies = {}) => {
@@ -31,7 +34,7 @@ export const createApp = (dependencies: AppDependencies = {}) => {
     }),
   );
   app.use(cookieParser());
-  app.use(express.json({ limit: "5mb" }));
+  app.use(express.json({ limit: "60mb" }));
 
   app.get("/health", (_request, response) => {
     response.status(200).json({ status: "ok" });
@@ -41,11 +44,13 @@ export const createApp = (dependencies: AppDependencies = {}) => {
   const animaRepository = dependencies.animaRepository ?? new PrismaAnimaRepository();
   const bestiaryAnimaRepository = dependencies.bestiaryAnimaRepository ?? new PrismaBestiaryAnimaRepository();
   const adoptionRepository = dependencies.adoptionRepository ?? new PrismaAdoptionRepository();
+  const mapRepository = dependencies.mapRepository ?? new PrismaMapRepository();
 
   app.use("/auth", createAuthRouter(userRepository));
   app.use("/animas", createAnimaRouter(animaRepository));
   app.use("/bestiario", createBestiaryAnimaRouter(bestiaryAnimaRepository));
   app.use("/adocoes", createAdoptionRouter(adoptionRepository, animaRepository));
+  app.use("/mapas", createMapRouter(mapRepository));
 
   app.use(notFoundMiddleware);
   app.use(errorMiddleware);

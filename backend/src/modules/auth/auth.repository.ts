@@ -1,5 +1,6 @@
-﻿import { User } from "@prisma/client";
+import { User } from "@prisma/client";
 import { prisma } from "../../config/prisma";
+import { UserRole } from "../../types/auth";
 
 export type UserEntity = User;
 
@@ -7,6 +8,7 @@ export type CreateUserData = {
   username: string;
   email: string;
   passwordHash: string;
+  role?: UserRole;
 };
 
 export interface UserRepository {

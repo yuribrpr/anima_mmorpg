@@ -39,6 +39,8 @@ export class BestiaryAnimaService {
       defense: input.defense,
       maxHp: input.maxHp,
       imageData: input.imageData ?? null,
+      spriteScale: input.spriteScale ?? 3,
+      flipHorizontal: input.flipHorizontal ?? true,
       powerLevel: input.powerLevel,
       bitsDrop,
       xpDrop,
