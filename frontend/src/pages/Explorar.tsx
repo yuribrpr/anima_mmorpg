@@ -831,8 +831,6 @@ export const ExplorarPage = () => {
         Math.floor((evolved.totalAttackSpeedSeconds ?? evolved.baseAnima.attackSpeedSeconds ?? 0.9) * 1000),
       );
       const nextScale = Math.max(evolved.baseAnima.spriteScale ?? 3, 0.1);
-      playerRef.current.scaleX = nextScale;
-      playerRef.current.scaleY = nextScale;
       spriteBaseFlipRef.current = evolved.baseAnima.flipHorizontal === false ? 1 : -1;
 
       const now = performance.now();
@@ -897,6 +895,8 @@ export const ExplorarPage = () => {
 
       window.setTimeout(() => {
         setSpriteData(evolved.baseAnima.imageData ?? null);
+        playerRef.current.scaleX = nextScale;
+        playerRef.current.scaleY = nextScale;
         screenFlashRef.current = {
           startedAt: performance.now(),
           ttlMs: 180,
@@ -2543,7 +2543,7 @@ export const ExplorarPage = () => {
                           color: "rgba(74, 222, 128, 1)",
                           critical: true,
                         });
-                        pushRewardText(rewardX, rewardY - 14, `Lv ${reward.level}`, "rgba(134, 239, 172, 1)", 1.02);
+                        pushRewardText(rewardX, rewardY - 14, "Lv Up", "rgba(134, 239, 172, 1)", 1.02);
                       }
                       setActiveQuests(reward.activeQuests);
                     })
@@ -3703,6 +3703,25 @@ export const ExplorarPage = () => {
               context.beginPath();
               context.arc(playerCenterX, playerBaseY - spriteBaseHeight * 0.56, auraRadius * 0.82, 0, Math.PI * 2);
               context.stroke();
+
+              const arrowBaseX = playerCenterX;
+              const arrowBaseY = playerBaseY - spriteBaseHeight * 0.52;
+              const arrowCount = 5;
+              for (let index = 0; index < arrowCount; index += 1) {
+                const phase = (auraT * 1.8 + index * 0.17) % 1;
+                const rise = phase * 22;
+                const spread = (index - (arrowCount - 1) / 2) * 9;
+                const alphaArrow = (1 - phase) * auraAlpha * 0.9;
+                const x = arrowBaseX + spread;
+                const y = arrowBaseY - rise;
+                context.strokeStyle = `rgba(167, 243, 208, ${alphaArrow})`;
+                context.lineWidth = 1.6;
+                context.beginPath();
+                context.moveTo(x - 3.4, y + 2.2);
+                context.lineTo(x, y - 2.4);
+                context.lineTo(x + 3.4, y + 2.2);
+                context.stroke();
+              }
               context.restore();
             } else {
               levelUpAuraRef.current = null;

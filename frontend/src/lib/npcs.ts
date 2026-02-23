@@ -78,6 +78,7 @@ export const deliverNpcQuest = async (npcId: string, questId: string) => {
 
   window.dispatchEvent(new CustomEvent("quest:changed"));
   window.dispatchEvent(new CustomEvent("inventory:changed"));
+  window.dispatchEvent(new CustomEvent("adoption:changed"));
   return response;
 };
 
@@ -99,6 +100,7 @@ export const registerEnemyDefeat = async (payload: { bestiaryAnimaId: string; dr
 
   window.dispatchEvent(new CustomEvent("inventory:changed"));
   window.dispatchEvent(new CustomEvent("quest:changed"));
+  window.dispatchEvent(new CustomEvent("adoption:changed"));
   return response;
 };
 

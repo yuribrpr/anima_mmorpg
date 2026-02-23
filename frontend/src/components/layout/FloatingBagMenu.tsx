@@ -159,11 +159,6 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
     () => visibleSlots.findIndex((entry) => entry !== null),
     [visibleSlots],
   );
-  const canEvolve = Boolean(
-    primaryAdoptedAnima?.baseAnima.nextEvolution &&
-      primaryAdoptedAnima.level >= primaryAdoptedAnima.baseAnima.nextEvolutionLevelRequired,
-  );
-  const canRegress = Boolean(primaryAdoptedAnima?.baseAnima.previousEvolution);
 
   const buildFallbackEvolutionChain = useCallback((adopted: AdoptedAnima): AdoptionEvolutionChain => {
     const chain: EvolutionChainNode[] = [];
@@ -558,99 +553,80 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
     return () => window.removeEventListener("keydown", handleHotbarKeyDown);
   }, [hotbarItems, triggerHotbarSlot]);
 
-  const handleEvolveAnima = useCallback(async () => {
-    if (!primaryAdoptedAnima || !canEvolve || !primaryAdoptedAnima.baseAnima.nextEvolution) {
-      return;
-    }
-    const previous = primaryAdoptedAnima;
-    setEvolutionSubmitting(true);
-    try {
-      const updated = await evolveAdoptedAnima(primaryAdoptedAnima.id);
-      setPrimaryAdoptedAnima(updated);
-      await syncEvolutionChain(updated);
-      setStatusMessage(`${previous.nickname} evoluiu para ${updated.baseAnima.name}.`);
-      window.dispatchEvent(
-        new CustomEvent("explore:anima-evolved", {
-          detail: {
-            action: "evolved",
-            from: previous,
-            to: updated,
-          },
-        }),
-      );
-    } catch (error) {
-      if (error instanceof ApiError) {
-        setStatusMessage(error.message);
-      } else {
-        setStatusMessage("Falha ao evoluir anima.");
-      }
-    } finally {
-      setEvolutionSubmitting(false);
-    }
-  }, [canEvolve, primaryAdoptedAnima, syncEvolutionChain]);
-
-  const handleRegressAnima = useCallback(async () => {
-    if (!primaryAdoptedAnima || !canRegress) {
-      return;
-    }
-    const previous = primaryAdoptedAnima;
-    setEvolutionSubmitting(true);
-    try {
-      const updated = await regressAdoptedAnima(primaryAdoptedAnima.id);
-      setPrimaryAdoptedAnima(updated);
-      await syncEvolutionChain(updated);
-      setStatusMessage(`${previous.nickname} regrediu para ${updated.baseAnima.name}.`);
-      window.dispatchEvent(
-        new CustomEvent("explore:anima-evolved", {
-          detail: {
-            action: "regressed",
-            from: previous,
-            to: updated,
-          },
-        }),
-      );
-    } catch (error) {
-      if (error instanceof ApiError) {
-        setStatusMessage(error.message);
-      } else {
-        setStatusMessage("Falha ao regredir anima.");
-      }
-    } finally {
-      setEvolutionSubmitting(false);
-    }
-  }, [canRegress, primaryAdoptedAnima, syncEvolutionChain]);
-
   const triggerEvolutionHotbarSlot = useCallback(
     async (slotIndex: number) => {
       if (!primaryAdoptedAnima || !evolutionChain || evolutionSubmitting) {
         return;
       }
+      setEvolutionSubmitting(true);
       const selected = unlockedEvolutionNodes[slotIndex];
       if (!selected) {
+        setEvolutionSubmitting(false);
         return;
       }
 
-      const currentIndex = evolutionChain.currentIndex;
-      const clickedIndex = evolutionChain.chain.findIndex((node) => node.id === selected.id);
-      if (clickedIndex < 0 || clickedIndex === currentIndex) {
-        return;
+      try {
+        const currentIndex = evolutionChain.currentIndex;
+        const clickedIndex = evolutionChain.chain.findIndex((node) => node.id === selected.id);
+        if (clickedIndex < 0 || clickedIndex === currentIndex) {
+          return;
+        }
+        const delta = clickedIndex - currentIndex;
+        let working = primaryAdoptedAnima;
+
+        if (delta < 0) {
+          const totalSteps = Math.abs(delta);
+          for (let step = 0; step < totalSteps; step += 1) {
+            if (!working.baseAnima.previousEvolution) {
+              break;
+            }
+            const updated = await regressAdoptedAnima(working.id);
+            working = updated;
+          }
+          setPrimaryAdoptedAnima(working);
+          await syncEvolutionChain(working);
+          setStatusMessage(`${primaryAdoptedAnima.nickname} regrediu para ${working.baseAnima.name}.`);
+          window.dispatchEvent(
+            new CustomEvent("explore:anima-evolved", {
+              detail: {
+                action: "regressed",
+                from: primaryAdoptedAnima,
+                to: working,
+              },
+            }),
+          );
+          return;
+        }
+
+        for (let target = currentIndex + 1; target <= clickedIndex; target += 1) {
+          const node = evolutionChain.chain[target];
+          if (!node) break;
+          const required = node.levelRequiredFromPrevious ?? Number.MAX_SAFE_INTEGER;
+          if (working.level < required) {
+            setStatusMessage(`Nivel insuficiente para chegar em ${node.name}. Necessario nivel ${required}.`);
+            return;
+          }
+          const updated = await evolveAdoptedAnima(working.id);
+          working = updated;
+        }
+
+        setPrimaryAdoptedAnima(working);
+        await syncEvolutionChain(working);
+        setStatusMessage(`${primaryAdoptedAnima.nickname} evoluiu para ${working.baseAnima.name}.`);
+        window.dispatchEvent(
+          new CustomEvent("explore:anima-evolved", {
+            detail: {
+              action: "evolved",
+              from: primaryAdoptedAnima,
+              to: working,
+            },
+          }),
+        );
+      } finally {
+        setEvolutionSubmitting(false);
       }
-      const delta = clickedIndex - currentIndex;
-      if (Math.abs(delta) !== 1) {
-        setStatusMessage("Nao e possivel pular evolucoes.");
-        return;
-      }
-      if (delta < 0) {
-        await handleRegressAnima();
-        return;
-      }
-      if (!canEvolve) {
-        setStatusMessage(`Nivel insuficiente para evoluir. Necessario nivel ${primaryAdoptedAnima.baseAnima.nextEvolutionLevelRequired}.`);
-        return;
-      }
-      await handleEvolveAnima();
     },
-    [canEvolve, evolutionChain, evolutionSubmitting, handleEvolveAnima, handleRegressAnima, primaryAdoptedAnima, unlockedEvolutionNodes],
+    [evolutionChain, evolutionSubmitting, primaryAdoptedAnima, setEvolutionSubmitting, syncEvolutionChain, unlockedEvolutionNodes],
   );
 
   const buildItemTooltip = (entry: InventoryItem) => {
@@ -725,9 +701,9 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
               const currentIndex = evolutionChain?.currentIndex ?? 0;
               const delta = node.chainIndex - currentIndex;
               const isCurrent = delta === 0;
-              const isClickable = (delta === -1 && canRegress) || (delta === 1 && canEvolve);
+              const isClickable = delta !== 0;
               const disabled = evolutionSubmitting || !isClickable;
-              const hint = isCurrent ? `${node.name} (Atual)` : delta === -1 ? `Regredir para ${node.name}` : delta === 1 ? `Evoluir para ${node.name}` : `${node.name} (nao pode pular)`;
+              const hint = isCurrent ? `${node.name} (Atual)` : delta < 0 ? `Regredir para ${node.name}` : `Evoluir para ${node.name}`;
 
               return (
                 <button
