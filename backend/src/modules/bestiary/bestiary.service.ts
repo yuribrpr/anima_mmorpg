@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { AppError } from "../../lib/errors";
 import { CreateBestiaryAnimaInput, UpdateBestiaryAnimaInput } from "../../types/bestiary-anima";
 import { BestiaryAnimaRepository } from "./bestiary.repository";
@@ -10,8 +11,15 @@ export class BestiaryAnimaService {
   }
 
   async create(input: CreateBestiaryAnimaInput) {
-    const data = this.prepareCreateOrUpdateData(input);
-    return this.bestiaryAnimaRepository.create(data);
+    try {
+      const data = this.prepareCreateOrUpdateData(input);
+      return this.bestiaryAnimaRepository.create(data);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+        throw new AppError(400, "BESTIARY_DROP_ITEM_NOT_FOUND", "One or more drop items are invalid");
+      }
+      throw error;
+    }
   }
 
   async update(id: string, input: UpdateBestiaryAnimaInput) {
@@ -21,8 +29,24 @@ export class BestiaryAnimaService {
       throw new AppError(404, "BESTIARY_ANIMA_NOT_FOUND", "Bestiary anima not found");
     }
 
-    const data = this.prepareCreateOrUpdateData(input);
-    return this.bestiaryAnimaRepository.update(id, data);
+    try {
+      const data = this.prepareCreateOrUpdateData(input);
+      return this.bestiaryAnimaRepository.update(id, data);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+        throw new AppError(400, "BESTIARY_DROP_ITEM_NOT_FOUND", "One or more drop items are invalid");
+      }
+      throw error;
+    }
+  }
+
+  async delete(id: string) {
+    const existing = await this.bestiaryAnimaRepository.findById(id);
+    if (!existing) {
+      throw new AppError(404, "BESTIARY_ANIMA_NOT_FOUND", "Bestiary anima not found");
+    }
+
+    await this.bestiaryAnimaRepository.delete(id);
   }
 
   private prepareCreateOrUpdateData(input: CreateBestiaryAnimaInput) {
@@ -40,10 +64,15 @@ export class BestiaryAnimaService {
       maxHp: input.maxHp,
       imageData: input.imageData ?? null,
       spriteScale: input.spriteScale ?? 3,
-      flipHorizontal: input.flipHorizontal ?? true,
+      flipHorizontal: input.flipHorizontal ?? false,
       powerLevel: input.powerLevel,
       bitsDrop,
       xpDrop,
+      drops: (input.drops ?? []).map((drop) => ({
+        itemId: drop.itemId,
+        quantity: Math.max(1, Math.floor(drop.quantity)),
+        dropChance: Math.max(0, Number(drop.dropChance)),
+      })),
     };
   }
 }

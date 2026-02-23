@@ -11,10 +11,12 @@ export const createBestiaryAnimaRouter = (bestiaryAnimaRepository: BestiaryAnima
   const controller = new BestiaryAnimaController(service);
 
   router.use(authMiddleware);
-  router.use(adminMiddleware);
   router.get("/", controller.list);
+
+  router.use(adminMiddleware);
   router.post("/", controller.create);
   router.put("/:id", controller.update);
+  router.delete("/:id", controller.delete);
 
   return router;
 };

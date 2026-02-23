@@ -7,6 +7,7 @@ import { ProtectedLayout } from "@/components/layout/ProtectedLayout";
 import { AdocaoPage } from "@/pages/Adocao";
 import { AdminAnimasPage } from "@/pages/AdminAnimas";
 import { AdminBestiarioPage } from "@/pages/AdminBestiario";
+import { AdminItensPage } from "@/pages/AdminItens";
 import { AdminMapasPage } from "@/pages/AdminMapas";
 import { ExplorarPage } from "@/pages/Explorar";
 import { InventarioPage } from "@/pages/Inventario";
@@ -62,6 +63,7 @@ const AppRoutes = () => (
         <Route path="/app/admin/mapas" element={<AdminMapasPage />} />
         <Route path="/app/admin/animas" element={<AdminAnimasPage />} />
         <Route path="/app/admin/bestiario" element={<AdminBestiarioPage />} />
+        <Route path="/app/admin/itens" element={<AdminItensPage />} />
       </Route>
     </Route>
 

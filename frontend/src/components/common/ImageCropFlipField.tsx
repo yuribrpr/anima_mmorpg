@@ -73,6 +73,7 @@ type ImageCropFlipFieldProps = {
   onChange: (value: string | null) => void;
   flipHorizontalValue?: boolean;
   onFlipHorizontalChange?: (value: boolean) => void;
+  enableFlip?: boolean;
   label?: string;
 };
 
@@ -315,6 +316,7 @@ export const ImageCropFlipField = ({
   onChange,
   flipHorizontalValue,
   onFlipHorizontalChange,
+  enableFlip = true,
   label = "Imagem",
 }: ImageCropFlipFieldProps) => {
   const [editorOpen, setEditorOpen] = useState(false);
@@ -323,7 +325,7 @@ export const ImageCropFlipField = ({
   const [staticImage, setStaticImage] = useState<HTMLImageElement | null>(null);
   const [animatedFrames, setAnimatedFrames] = useState<AnimatedFrame[] | null>(null);
   const [selection, setSelection] = useState<CropSelection | null>(null);
-  const [flipHorizontal, setFlipHorizontal] = useState(true);
+  const [flipHorizontal, setFlipHorizontal] = useState(enableFlip);
   const [loadingImage, setLoadingImage] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
 
@@ -341,12 +343,19 @@ export const ImageCropFlipField = ({
   }, [editorOpen, value]);
 
   useEffect(() => {
+    if (!enableFlip) {
+      setFlipHorizontal(false);
+      return;
+    }
     if (typeof flipHorizontalValue === "boolean") {
       setFlipHorizontal(flipHorizontalValue);
     }
-  }, [flipHorizontalValue]);
+  }, [enableFlip, flipHorizontalValue]);
 
   const syncFlipHorizontal = (nextValue: boolean) => {
+    if (!enableFlip) {
+      return;
+    }
     setFlipHorizontal(nextValue);
     onFlipHorizontalChange?.(nextValue);
   };
@@ -491,7 +500,8 @@ export const ImageCropFlipField = ({
 
         previewContext.clearRect(0, 0, previewWidth, previewHeight);
         previewContext.save();
-        if (flipHorizontal) {
+        const shouldFlip = enableFlip && flipHorizontal;
+        if (shouldFlip) {
           previewContext.translate(previewWidth, 0);
           previewContext.scale(-1, 1);
         }
@@ -506,7 +516,7 @@ export const ImageCropFlipField = ({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [animatedFrames, editorOpen, flipHorizontal, selection, sourceSize, staticImage]);
+  }, [animatedFrames, editorOpen, enableFlip, flipHorizontal, selection, sourceSize, staticImage]);
 
   const applyAndSave = () => {
     if (!selection || !sourceImage) {
@@ -515,10 +525,11 @@ export const ImageCropFlipField = ({
 
     try {
       const mimeType = getDataUrlMime(sourceImage);
+      const shouldFlip = enableFlip && flipHorizontal;
       const output = mimeType.includes("gif")
-        ? drawGifToDataUrl(sourceImage, selection, flipHorizontal)
+        ? drawGifToDataUrl(sourceImage, selection, shouldFlip)
         : staticImage
-          ? drawStaticToDataUrl(staticImage, selection, flipHorizontal, mimeType)
+          ? drawStaticToDataUrl(staticImage, selection, shouldFlip, mimeType)
           : null;
 
       if (!output) {
@@ -589,7 +600,7 @@ export const ImageCropFlipField = ({
                   .finally(() => setLoadingImage(false));
               }}
             >
-              Recortar / Flipar
+              {enableFlip ? "Recortar / Flipar" : "Recortar"}
             </Button>
           </DialogTrigger>
           <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-5xl">
@@ -698,15 +709,19 @@ export const ImageCropFlipField = ({
               <div className="space-y-3">
                 <div className="rounded-md border bg-muted/20 p-3">
                   <p className="mb-2 text-xs text-muted-foreground">Configurações</p>
-                  <label className="inline-flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={flipHorizontal}
-                      onChange={(event) => syncFlipHorizontal(event.target.checked)}
-                      className="h-4 w-4"
-                    />
-                    Flip horizontal
-                  </label>
+                  {enableFlip ? (
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={flipHorizontal}
+                        onChange={(event) => syncFlipHorizontal(event.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      Flip horizontal
+                    </label>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Flip desativado neste formulario.</p>
+                  )}
                   <p className="mt-2 text-xs text-muted-foreground">Imagem original: {imageMeta}</p>
                   <p className="text-xs text-muted-foreground">
                     Corte:{" "}
@@ -753,7 +768,7 @@ export const ImageCropFlipField = ({
         </Button>
       </div>
 
-      <p className="text-xs text-muted-foreground">Padrao recomendado: manter flip horizontal marcado para esquerda.</p>
+      {enableFlip ? <p className="text-xs text-muted-foreground">Padrao recomendado: manter flip horizontal marcado para esquerda.</p> : null}
       {value ? (
         <div className="rounded-md border bg-muted/20 p-2">
           <img src={value} alt="Preview imagem editada" className="h-20 w-20 rounded object-cover" />

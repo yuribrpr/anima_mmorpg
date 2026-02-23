@@ -40,6 +40,10 @@ export const createMapSchema = z.object({
   name: z.string().trim().min(2).max(80),
 });
 
+export const updateMapSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+});
+
 export const updateActiveMapStateSchema = z.object({
   tileX: z.number().int().min(0).max(MAP_COLS - 1),
   tileY: z.number().int().min(0).max(MAP_ROWS - 1),

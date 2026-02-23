@@ -4,16 +4,22 @@ import { decompressFrames, parseGIF, type ParsedFrame } from "gifuct-js";
 import { ApiError } from "@/lib/api";
 import { listAdoptedAnimas } from "@/lib/adocoes";
 import { listBestiaryAnimas } from "@/lib/bestiario";
+import { collectInventoryDrop } from "@/lib/inventario";
 import { findNearestWalkableTile, findPathAStar, RENDER_BASE_HEIGHT, TILE_SIZE } from "@/lib/map-grid";
 import type { GridPoint } from "@/lib/map-grid";
-import { getActiveMap, updateActiveState, usePortal } from "@/lib/mapas";
+import { getActiveMap, listActivePlayers, updateActiveState, usePortal } from "@/lib/mapas";
 import type { GameMap } from "@/types/mapa";
 import type { BestiaryAnima } from "@/types/bestiary-anima";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { FloatingBagMenu } from "@/components/layout/FloatingBagMenu";
 
 type PlayerRuntime = {
+  animaName: string;
+  level: number;
+  experience: number;
+  experienceMax: number;
   tileX: number;
   tileY: number;
   renderX: number;
@@ -63,6 +69,7 @@ type SpriteAsset = {
 
 type EnemyGroupRuntime = {
   id: string;
+  bestiaryAnimaId: string;
   name: string;
   respawnMs: number;
   movementSpeed: number;
@@ -139,11 +146,42 @@ type AttackEffect = {
   critical: boolean;
 };
 
+type GroundDrop = {
+  id: string;
+  itemId: string;
+  itemName: string;
+  imageData: string | null;
+  quantity: number;
+  tileX: number;
+  tileY: number;
+  worldX: number;
+  worldY: number;
+  spawnedAt: number;
+  expiresAt: number;
+  collecting: boolean;
+};
+
 type PortalPromptState = {
   portalId: string;
   targetMapName: string;
   targetSpawnX: number;
   targetSpawnY: number;
+};
+
+type OtherPlayerRuntime = {
+  userId: string;
+  username: string;
+  animaName: string;
+  animaLevel: number;
+  animaImageData: string | null;
+  animaFlipHorizontal: boolean;
+  animaSpriteScale: number;
+  tileX: number;
+  tileY: number;
+  scaleX: number;
+  scaleY: number;
+  facingX: -1 | 1;
+  updatedAtMs: number;
 };
 
 const getDataUrlMime = (dataUrl: string) => {
@@ -319,12 +357,17 @@ const findNearestWalkableInArea = (origin: GridPoint, area: boolean[][], collisi
   return null;
 };
 
-const ENEMY_DEATH_DURATION_MS = 420;
-const ENEMY_SPAWN_PORTAL_MS = 620;
+const ENEMY_DEATH_DURATION_MS = 560;
+const ENEMY_SPAWN_PORTAL_MS = 760;
 const ENEMY_AGGRO_DURATION_MS = 600_000;
 const DAMAGE_TEXT_TTL_MS = 760;
 const ATTACK_EFFECT_TTL_MS = 190;
 const ATTACK_LUNGE_DURATION_MS = 230;
+const DROP_TTL_MS = 10_000;
+const DROP_DRAW_SIZE = 30;
+const DROP_HIT_RADIUS = 20;
+const ENEMY_COMBAT_SPEED_MULTIPLIER = 1.3;
+const ENEMY_LOW_HP_RATIO_TO_FLEE = 0.15;
 
 const isAdjacentTile = (from: GridPoint, to: GridPoint) => Math.abs(from.x - to.x) <= 1 && Math.abs(from.y - to.y) <= 1;
 
@@ -368,6 +411,138 @@ const drawSpriteShadow = (
   context.restore();
 };
 
+const drawRoundedRect = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) => {
+  const r = Math.max(0, Math.min(radius, Math.min(width, height) / 2));
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.lineTo(x + width - r, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + r);
+  context.lineTo(x + width, y + height - r);
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  context.lineTo(x + r, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - r);
+  context.lineTo(x, y + r);
+  context.quadraticCurveTo(x, y, x + r, y);
+  context.closePath();
+};
+
+const hashNoise = (x: number, y: number, seed: number) => {
+  let value = Math.imul(x + 374761393, 668265263) ^ Math.imul(y + 1274126177, 2246822519) ^ Math.imul(seed + 1597334677, 3266489917);
+  value = (value ^ (value >>> 13)) >>> 0;
+  value = Math.imul(value, 1274126177) >>> 0;
+  return ((value ^ (value >>> 16)) >>> 0) / 4294967295;
+};
+
+const drawEnemySpawnPortal = (
+  context: CanvasRenderingContext2D,
+  centerX: number,
+  baseY: number,
+  drawWidth: number,
+  spawnProgress: number,
+  now: number,
+) => {
+  const spawnPhase = 1 - spawnProgress;
+  if (spawnPhase <= 0) {
+    return;
+  }
+
+  const radiusX = Math.max(9, drawWidth * (0.2 + spawnProgress * 0.14));
+  const radiusY = Math.max(4.2, radiusX * 0.42);
+  const glowAlpha = clamp(spawnPhase * 0.95, 0, 0.95);
+  const swirl = now * 0.006;
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.globalAlpha = glowAlpha;
+
+  const gradient = context.createRadialGradient(centerX, baseY - 2, radiusY * 0.35, centerX, baseY - 2, radiusX * 1.25);
+  gradient.addColorStop(0, "rgba(110, 231, 255, 0.48)");
+  gradient.addColorStop(0.55, "rgba(56, 189, 248, 0.24)");
+  gradient.addColorStop(1, "rgba(14, 116, 144, 0)");
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.ellipse(centerX, baseY - 2, radiusX * 1.12, radiusY * 1.15, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.lineWidth = 2;
+  context.strokeStyle = "rgba(45, 212, 191, 0.9)";
+  context.beginPath();
+  context.ellipse(centerX, baseY - 2, radiusX, radiusY, 0, 0, Math.PI * 2);
+  context.stroke();
+
+  context.lineWidth = 1.4;
+  context.strokeStyle = "rgba(125, 211, 252, 0.85)";
+  context.beginPath();
+  context.ellipse(centerX, baseY - 2, radiusX * 0.72, radiusY * 0.72, 0, 0, Math.PI * 2);
+  context.stroke();
+
+  const sigilCount = 10;
+  for (let index = 0; index < sigilCount; index += 1) {
+    const t = swirl + (index / sigilCount) * Math.PI * 2;
+    const px = centerX + Math.cos(t) * radiusX * 0.92;
+    const py = baseY - 2 + Math.sin(t) * radiusY * 0.92;
+    context.fillStyle = "rgba(165, 243, 252, 0.86)";
+    context.fillRect(px - 1.4, py - 1.4, 2.8, 2.8);
+  }
+
+  context.restore();
+};
+
+const drawSpriteDeathDissolve = (
+  context: CanvasRenderingContext2D,
+  sprite: CanvasImageSource,
+  spriteWidth: number,
+  spriteHeight: number,
+  drawWidth: number,
+  drawHeight: number,
+  progress: number,
+  seed: number,
+) => {
+  const blockSize = clamp(Math.floor(Math.min(drawWidth, drawHeight) / 13), 2, 6);
+  const cols = Math.max(1, Math.ceil(drawWidth / blockSize));
+  const rows = Math.max(1, Math.ceil(drawHeight / blockSize));
+  const srcStepX = spriteWidth / cols;
+  const srcStepY = spriteHeight / rows;
+  const rise = progress * (drawHeight * 0.16 + 6);
+  const spread = progress * 1.3;
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const noise = hashNoise(col, row, seed);
+      const threshold = noise * 0.95;
+      if (progress > threshold) {
+        continue;
+      }
+
+      const px = -drawWidth / 2 + col * blockSize;
+      const py = -drawHeight + row * blockSize;
+      const driftX = (hashNoise(row, col, seed + 11) - 0.5) * spread * blockSize;
+      const driftY = -rise * (0.55 + noise * 0.45);
+
+      context.globalAlpha = clamp(1 - progress * 0.78 + noise * 0.18, 0.08, 1);
+      context.drawImage(
+        sprite,
+        col * srcStepX,
+        row * srcStepY,
+        srcStepX,
+        srcStepY,
+        px + driftX,
+        py + driftY,
+        blockSize + 0.65,
+        blockSize + 0.65,
+      );
+    }
+  }
+  context.globalAlpha = 1;
+};
+
 export const ExplorarPage = () => {
   const [mapData, setMapData] = useState<GameMap | null>(null);
   const [loading, setLoading] = useState(true);
@@ -395,6 +570,11 @@ export const ExplorarPage = () => {
   const teleportingRef = useRef(false);
   const damageTextsRef = useRef<DamageText[]>([]);
   const attackEffectsRef = useRef<AttackEffect[]>([]);
+  const otherPlayersRef = useRef<Map<string, OtherPlayerRuntime>>(new Map());
+  const groundDropsRef = useRef<GroundDrop[]>([]);
+  const dropImageMapRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const collectingDropIdRef = useRef<string | null>(null);
+  const cursorModeRef = useRef<"default" | "copy">("default");
   const heldKeysRef = useRef<Set<string>>(new Set());
   const mouseHeldRef = useRef(false);
   const hoverTargetRef = useRef<GridPoint | null>(null);
@@ -410,6 +590,10 @@ export const ExplorarPage = () => {
   const enemyGroupsRef = useRef<Map<string, EnemyGroupRuntime>>(new Map());
   const enemiesRef = useRef<EnemyRuntime[]>([]);
   const playerRef = useRef<PlayerRuntime>({
+    animaName: "Anima",
+    level: 1,
+    experience: 0,
+    experienceMax: 1000,
     tileX: 0,
     tileY: 0,
     renderX: 0,
@@ -559,6 +743,7 @@ export const ExplorarPage = () => {
 
       const runtime: EnemyGroupRuntime = {
         id: config.id,
+        bestiaryAnimaId: config.bestiaryAnimaId,
         name: bestiary?.name ?? config.bestiaryName ?? "Inimigo",
         respawnMs: Math.max(500, Math.floor(config.respawnSeconds * 1000)),
         movementSpeed: Math.max(config.movementSpeed ?? 2.2, 0.25),
@@ -573,7 +758,7 @@ export const ExplorarPage = () => {
         spawnTiles,
         movementTiles: movementTiles.length > 0 ? movementTiles : spawnTiles,
         spriteScale: Math.max(config.spriteScale || 3, 0.1),
-        flipHorizontal: config.flipHorizontal !== false,
+        flipHorizontal: config.flipHorizontal === true,
       };
       const activeMovementArea = runtime.movementTiles === movementTiles ? config.movementArea : config.spawnArea;
       runtime.movementArea = activeMovementArea;
@@ -766,6 +951,22 @@ export const ExplorarPage = () => {
     return best;
   }, []);
 
+  const findDropAtWorldPoint = useCallback((worldX: number, worldY: number): GroundDrop | null => {
+    const ordered = [...groundDropsRef.current]
+      .filter((drop) => !drop.collecting)
+      .sort((left, right) => right.worldY - left.worldY);
+
+    for (const drop of ordered) {
+      const dx = worldX - drop.worldX;
+      const dy = worldY - (drop.worldY - 10);
+      if (dx * dx + dy * dy <= DROP_HIT_RADIUS * DROP_HIT_RADIUS) {
+        return drop;
+      }
+    }
+
+    return null;
+  }, []);
+
   const tryStartMove = useCallback(
     (target: GridPoint, options?: { allowCornerCut?: boolean }) => {
       const map = mapData;
@@ -810,7 +1011,20 @@ export const ExplorarPage = () => {
   const cancelTracking = useCallback(() => {
     playerRef.current.trackingEnemyId = null;
     playerRef.current.nextTrackingPathAt = 0;
+    collectingDropIdRef.current = null;
     selectedEnemyIdRef.current = null;
+  }, []);
+
+  const setCanvasCursorMode = useCallback((mode: "default" | "copy") => {
+    if (cursorModeRef.current === mode) {
+      return;
+    }
+
+    cursorModeRef.current = mode;
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.style.cursor = mode;
+    }
   }, []);
 
   const pushDamageText = useCallback((x: number, y: number, value: number, critical: boolean, fromEnemy: boolean) => {
@@ -840,6 +1054,58 @@ export const ExplorarPage = () => {
     });
   }, []);
 
+  const spawnGroundDropsForEnemy = useCallback((enemy: EnemyRuntime, now: number) => {
+    const group = enemyGroupsRef.current.get(enemy.groupId);
+    if (!group) {
+      return;
+    }
+
+    const bestiary = bestiaryStatsRef.current.get(group.bestiaryAnimaId);
+    if (!bestiary || !bestiary.drops || bestiary.drops.length === 0) {
+      return;
+    }
+
+    const generated: GroundDrop[] = [];
+    for (const drop of bestiary.drops) {
+      const roll = Math.random() * 100;
+      if (roll > drop.dropChance) {
+        continue;
+      }
+
+      const index = generated.length;
+      const worldBaseX = enemy.tileX * TILE_SIZE + TILE_SIZE / 2;
+      const worldBaseY = enemy.tileY * TILE_SIZE + TILE_SIZE * 0.82;
+      const jitterX = ((index % 3) - 1) * 8;
+      const jitterY = Math.floor(index / 3) * 5;
+      const dropId = `${enemy.id}_${drop.itemId}_${now}_${index}`;
+
+      generated.push({
+        id: dropId,
+        itemId: drop.itemId,
+        itemName: drop.item.name,
+        imageData: drop.item.imageData,
+        quantity: Math.max(1, Math.floor(drop.quantity)),
+        tileX: enemy.tileX,
+        tileY: enemy.tileY,
+        worldX: worldBaseX + jitterX,
+        worldY: worldBaseY + jitterY,
+        spawnedAt: now,
+        expiresAt: now + DROP_TTL_MS,
+        collecting: false,
+      });
+
+      if (drop.item.imageData && !dropImageMapRef.current.has(dropId)) {
+        const image = new Image();
+        image.src = drop.item.imageData;
+        dropImageMapRef.current.set(dropId, image);
+      }
+    }
+
+    if (generated.length > 0) {
+      groundDropsRef.current.push(...generated);
+    }
+  }, []);
+
   const hydrateMapRuntime = useCallback((map: GameMap): GameMap => {
     const normalizedEnemySpawns = (map.enemySpawns ?? []).map((group) => {
       const fallback = bestiaryStatsRef.current.get(group.bestiaryAnimaId);
@@ -848,7 +1114,7 @@ export const ExplorarPage = () => {
         bestiaryName: fallback?.name ?? group.bestiaryName ?? null,
         imageData: fallback?.imageData ?? group.imageData ?? null,
         spriteScale: Math.max(fallback?.spriteScale ?? group.spriteScale ?? 3, 0.1),
-        flipHorizontal: fallback?.flipHorizontal ?? group.flipHorizontal ?? true,
+        flipHorizontal: fallback?.flipHorizontal ?? group.flipHorizontal ?? false,
         movementSpeed: Math.max(group.movementSpeed ?? 2.2, 0.25),
       };
     });
@@ -896,6 +1162,9 @@ export const ExplorarPage = () => {
       engagedEnemyIdRef.current = null;
       damageTextsRef.current = [];
       attackEffectsRef.current = [];
+      groundDropsRef.current = [];
+      dropImageMapRef.current = new Map();
+      collectingDropIdRef.current = null;
       setPortalPrompt(null);
       cancelTracking();
       setErrorMessage(null);
@@ -925,12 +1194,19 @@ export const ExplorarPage = () => {
         const bestiaryMap = new Map(bestiary.map((item) => [item.id, item]));
         bestiaryStatsRef.current = bestiaryMap;
         setMapData(hydrateMapRuntime(active.map));
+        groundDropsRef.current = [];
+        dropImageMapRef.current = new Map();
+        collectingDropIdRef.current = null;
         suppressPortalPromptUntilLeaveRef.current = true;
         playerRef.current.tileX = active.state.tileX;
         playerRef.current.tileY = active.state.tileY;
         playerRef.current.renderX = active.state.tileX;
         playerRef.current.renderY = active.state.tileY;
         const primary = adopted.find((item) => item.isPrimary) ?? null;
+        playerRef.current.animaName = primary?.nickname?.trim() || primary?.baseAnima.name || "Anima";
+        playerRef.current.level = Math.max(1, primary?.level ?? 1);
+        playerRef.current.experience = Math.max(0, primary?.experience ?? 0);
+        playerRef.current.experienceMax = Math.max(1, primary?.experienceMax ?? 1000);
         const hasAnimaScale = typeof primary?.baseAnima.spriteScale === "number";
         const animaScale = Math.max(primary?.baseAnima.spriteScale ?? 3, 0.1);
         const initialScaleX = hasAnimaScale ? animaScale : active.state.scaleX;
@@ -981,6 +1257,68 @@ export const ExplorarPage = () => {
   }, [hydrateMapRuntime]);
 
   useEffect(() => {
+    if (!mapData) {
+      otherPlayersRef.current = new Map();
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncPlayers = async () => {
+      try {
+        const players = await listActivePlayers();
+        if (cancelled) return;
+
+        const previousPlayers = otherPlayersRef.current;
+        const nextMap = new Map<string, OtherPlayerRuntime>();
+        for (const player of players) {
+          const parsedUpdatedAt = Date.parse(player.updatedAt);
+          const previous = previousPlayers.get(player.userId) ?? null;
+          let facingX: -1 | 1 = previous?.facingX ?? -1;
+          if (previous) {
+            if (player.tileX > previous.tileX) {
+              facingX = 1;
+            } else if (player.tileX < previous.tileX) {
+              facingX = -1;
+            }
+          }
+
+          const animaImageData = null;
+
+          nextMap.set(player.userId, {
+            userId: player.userId,
+            username: player.username,
+            animaName: player.animaName?.trim() || "Anima",
+            animaLevel: Math.max(1, player.animaLevel ?? 1),
+            animaImageData,
+            animaFlipHorizontal: player.animaFlipHorizontal !== false,
+            animaSpriteScale: Math.max(player.animaSpriteScale ?? 3, 0.1),
+            tileX: player.tileX,
+            tileY: player.tileY,
+            scaleX: player.scaleX,
+            scaleY: player.scaleY,
+            facingX,
+            updatedAtMs: Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Date.now(),
+          });
+        }
+        otherPlayersRef.current = nextMap;
+      } catch {
+        // Presence sync is best-effort.
+      }
+    };
+
+    void syncPlayers();
+    const intervalId = window.setInterval(() => {
+      void syncPlayers();
+    }, 1200);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [mapData?.id]);
+
+  useEffect(() => {
     if (!mapData?.backgroundImageData) {
       backgroundImageRef.current = null;
       return;
@@ -993,21 +1331,75 @@ export const ExplorarPage = () => {
 
   useEffect(() => {
     if (!mapData) {
+      return;
+    }
+
+    const heartbeat = window.setInterval(() => {
+      const player = playerRef.current;
+      void persistState(player.tileX, player.tileY, player.scaleX, player.scaleY);
+    }, 2500);
+
+    return () => {
+      window.clearInterval(heartbeat);
+    };
+  }, [mapData?.id, persistState]);
+
+  useEffect(() => {
+    if (!mapData) {
       enemyGroupsRef.current = new Map();
       enemiesRef.current = [];
+      otherPlayersRef.current = new Map();
       damageTextsRef.current = [];
       attackEffectsRef.current = [];
+      groundDropsRef.current = [];
+      dropImageMapRef.current = new Map();
+      collectingDropIdRef.current = null;
       selectedEnemyIdRef.current = null;
       engagedEnemyIdRef.current = null;
       activePortalIdRef.current = null;
       suppressPortalPromptUntilLeaveRef.current = true;
       setPortalPrompt(null);
       cancelTracking();
+      setCanvasCursorMode("default");
       return;
     }
 
     rebuildEnemies(mapData);
-  }, [cancelTracking, mapData, rebuildEnemies]);
+  }, [cancelTracking, mapData, rebuildEnemies, setCanvasCursorMode]);
+
+  useEffect(() => {
+    const onConsumableUsed = (
+      event: Event & {
+        detail?: {
+          currentHp: number;
+          totalMaxHp: number;
+          bonusAttackAdded: number;
+          bonusDefenseAdded: number;
+        };
+      },
+    ) => {
+      const detail = event.detail;
+      if (!detail) {
+        return;
+      }
+
+      playerRef.current.maxHp = Math.max(1, detail.totalMaxHp);
+      playerRef.current.hp = clamp(detail.currentHp, 0, playerRef.current.maxHp);
+      playerRef.current.attack = Math.max(1, playerRef.current.attack + detail.bonusAttackAdded);
+      playerRef.current.defense = Math.max(0, playerRef.current.defense + detail.bonusDefenseAdded);
+    };
+
+    window.addEventListener("explore:consumable-used", onConsumableUsed as EventListener);
+    return () => {
+      window.removeEventListener("explore:consumable-used", onConsumableUsed as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    groundDropsRef.current = [];
+    dropImageMapRef.current = new Map();
+    collectingDropIdRef.current = null;
+  }, [mapData?.id]);
 
   useEffect(() => {
     if (!spriteData) {
@@ -1204,6 +1596,63 @@ export const ExplorarPage = () => {
         }
       }
 
+      const validDrops: GroundDrop[] = [];
+      for (const drop of groundDropsRef.current) {
+        if (now < drop.expiresAt || drop.collecting) {
+          validDrops.push(drop);
+        } else {
+          dropImageMapRef.current.delete(drop.id);
+          if (collectingDropIdRef.current === drop.id) {
+            collectingDropIdRef.current = null;
+          }
+        }
+      }
+      groundDropsRef.current = validDrops;
+
+      const collectingDropId = collectingDropIdRef.current;
+      if (collectingDropId && !playerRef.current.moving) {
+        const targetDrop = groundDropsRef.current.find((drop) => drop.id === collectingDropId) ?? null;
+        if (!targetDrop) {
+          collectingDropIdRef.current = null;
+        } else {
+          const playerTile = { x: playerRef.current.tileX, y: playerRef.current.tileY };
+          const targetTile = { x: targetDrop.tileX, y: targetDrop.tileY };
+          if (pointsEqual(playerTile, targetTile)) {
+            if (!targetDrop.collecting) {
+              targetDrop.collecting = true;
+              void collectInventoryDrop(targetDrop.itemId, targetDrop.quantity)
+                .then(() => {
+                  groundDropsRef.current = groundDropsRef.current.filter((drop) => drop.id !== targetDrop.id);
+                  dropImageMapRef.current.delete(targetDrop.id);
+                  if (collectingDropIdRef.current === targetDrop.id) {
+                    collectingDropIdRef.current = null;
+                  }
+                })
+                .catch((error) => {
+                  targetDrop.collecting = false;
+                  collectingDropIdRef.current = null;
+                  if (error instanceof ApiError) {
+                    setErrorMessage(error.message);
+                  } else {
+                    setErrorMessage("Falha ao coletar drop.");
+                  }
+                });
+            }
+          } else if (routeRef.current.length === 0) {
+            const navigationLayer = buildNavigationCollisionLayer(map);
+            const pathLayer = navigationLayer.map((row) => row.slice());
+            pathLayer[playerTile.y][playerTile.x] = false;
+            const path = findPathAStar(playerTile, targetTile, pathLayer, { allowCornerCut: true });
+            if (path.length > 1) {
+              routeRef.current = path.slice(1);
+              routeAllowsCornerCutRef.current = true;
+            } else {
+              collectingDropIdRef.current = null;
+            }
+          }
+        }
+      }
+
       const trackingEnemyId = playerRef.current.trackingEnemyId;
       if (trackingEnemyId && !playerRef.current.moving) {
         const targetEnemy = enemiesRef.current.find(
@@ -1269,6 +1718,7 @@ export const ExplorarPage = () => {
                 targetEnemy.hp = 0;
                 targetEnemy.route = [];
                 targetEnemy.moving = false;
+                spawnGroundDropsForEnemy(targetEnemy, now);
                 targetEnemy.deathStartedAt = now;
                 targetEnemy.aggroUntilAt = 0;
                 if (selectedEnemyIdRef.current === targetEnemy.id) {
@@ -1338,7 +1788,37 @@ export const ExplorarPage = () => {
         }
       }
 
+      const isTileOccupiedByOtherEnemy = (enemyId: string, tileX: number, tileY: number) =>
+        enemiesRef.current.some((other) => {
+          if (other.id === enemyId || !other.spawned || other.deathStartedAt > 0) {
+            return false;
+          }
+
+          const occupiesCurrent = other.tileX === tileX && other.tileY === tileY;
+          const occupiesTarget = other.moving && other.toX === tileX && other.toY === tileY;
+          return occupiesCurrent || occupiesTarget;
+        });
+
+      const canEnemyUseTile = (enemy: EnemyRuntime, group: EnemyGroupRuntime, tileX: number, tileY: number) => {
+        if (tileX < 0 || tileX >= map.cols || tileY < 0 || tileY >= map.rows) {
+          return false;
+        }
+        if (group.movementCollisionLayer[tileY]?.[tileX] === true) {
+          return false;
+        }
+        if (isTileOccupiedByOtherEnemy(enemy.id, tileX, tileY)) {
+          return false;
+        }
+        return true;
+      };
+
       const startEnemyStep = (enemy: EnemyRuntime, group: EnemyGroupRuntime, next: GridPoint, speedMultiplier = 1) => {
+        if (!canEnemyUseTile(enemy, group, next.x, next.y)) {
+          enemy.route = [];
+          enemy.nextDecisionAt = now + 110;
+          return false;
+        }
+
         const dx = next.x - enemy.tileX;
         const dy = next.y - enemy.tileY;
         if (dx > 0) {
@@ -1355,6 +1835,7 @@ export const ExplorarPage = () => {
         const distance = Math.max(1, Math.hypot(dx, dy));
         const speed = Math.max(group.movementSpeed * speedMultiplier, 0.25);
         enemy.moveDurationMs = clamp((distance / speed) * 1000, 90, 1400);
+        return true;
       };
 
       for (const enemy of enemiesRef.current) {
@@ -1380,7 +1861,8 @@ export const ExplorarPage = () => {
 
         if (!enemy.spawned) {
           if (now >= enemy.respawnAt) {
-            const spawnTile = pickRandom(group.spawnTiles) ?? pickRandom(group.movementTiles);
+            const spawnCandidates = [...group.spawnTiles, ...group.movementTiles].filter((tile) => canEnemyUseTile(enemy, group, tile.x, tile.y));
+            const spawnTile = pickRandom(spawnCandidates);
             if (spawnTile) {
               enemy.spawned = true;
               enemy.tileX = spawnTile.x;
@@ -1389,6 +1871,7 @@ export const ExplorarPage = () => {
               enemy.renderY = spawnTile.y;
               enemy.hp = enemy.maxHp;
               enemy.route = [];
+              enemy.facingX = -1;
               enemy.aggroUntilAt = 0;
               enemy.lastAttackAt = 0;
               enemy.spawnFxUntil = now + ENEMY_SPAWN_PORTAL_MS;
@@ -1418,10 +1901,31 @@ export const ExplorarPage = () => {
         }
 
         if (enemy.moving) {
+          if (!canEnemyUseTile(enemy, group, enemy.toX, enemy.toY)) {
+            enemy.moving = false;
+            enemy.route = [];
+            enemy.toX = enemy.tileX;
+            enemy.toY = enemy.tileY;
+            enemy.renderX = enemy.tileX;
+            enemy.renderY = enemy.tileY;
+            enemy.nextDecisionAt = now + 90;
+            continue;
+          }
+
           const t = clamp((now - enemy.moveStartedAt) / enemy.moveDurationMs, 0, 1);
           enemy.renderX = enemy.fromX + (enemy.toX - enemy.fromX) * t;
           enemy.renderY = enemy.fromY + (enemy.toY - enemy.fromY) * t;
           if (t >= 1) {
+            if (!canEnemyUseTile(enemy, group, enemy.toX, enemy.toY)) {
+              enemy.moving = false;
+              enemy.route = [];
+              enemy.toX = enemy.tileX;
+              enemy.toY = enemy.tileY;
+              enemy.renderX = enemy.tileX;
+              enemy.renderY = enemy.tileY;
+              enemy.nextDecisionAt = now + 100;
+              continue;
+            }
             enemy.moving = false;
             enemy.tileX = enemy.toX;
             enemy.tileY = enemy.toY;
@@ -1434,8 +1938,10 @@ export const ExplorarPage = () => {
         const playerTile = { x: playerRef.current.tileX, y: playerRef.current.tileY };
         const enemyTile = { x: enemy.tileX, y: enemy.tileY };
         const inRangeForAttack = isAdjacentTile(enemyTile, playerTile);
+        const enemyHpRatio = toHealthRatio(enemy.hp, enemy.maxHp);
+        const shouldFlee = isAggro && enemyHpRatio <= ENEMY_LOW_HP_RATIO_TO_FLEE;
 
-        if (isAggro && inRangeForAttack && now - enemy.lastAttackAt >= enemy.attackIntervalMs) {
+        if (isAggro && !shouldFlee && inRangeForAttack && now - enemy.lastAttackAt >= enemy.attackIntervalMs) {
           enemy.lastAttackAt = now;
           const damage = rollDamage(enemy.attack, playerRef.current.defense, enemy.critChance);
           playerRef.current.hp = clamp(playerRef.current.hp - damage.value, 1, playerRef.current.maxHp);
@@ -1468,16 +1974,24 @@ export const ExplorarPage = () => {
           continue;
         }
 
-        const shouldOrbit = isAggro && inRangeForAttack && now - enemy.lastAttackAt < enemy.attackIntervalMs;
+        const shouldOrbit = isAggro && !shouldFlee && inRangeForAttack && now - enemy.lastAttackAt < enemy.attackIntervalMs;
 
-        if (isAggro && enemy.route.length > 0) {
+        if (shouldFlee && enemy.route.length > 0) {
           enemy.route = [];
         }
 
-        if (!isAggro && enemy.route.length > 0) {
+        if (enemy.route.length > 0) {
           const nextStep = enemy.route.shift();
-          if (nextStep && group.movementCollisionLayer[nextStep.y]?.[nextStep.x] !== true) {
-            startEnemyStep(enemy, group, nextStep, isAggro ? 1.3 : 1);
+          if (nextStep && canEnemyUseTile(enemy, group, nextStep.x, nextStep.y)) {
+            const started = startEnemyStep(enemy, group, nextStep, isAggro ? ENEMY_COMBAT_SPEED_MULTIPLIER : 1);
+            if (started) {
+              continue;
+            }
+          } else if (nextStep) {
+            enemy.route = [];
+            enemy.nextDecisionAt = now + 90;
+          }
+          if (enemy.route.length > 0) {
             continue;
           }
           enemy.route = [];
@@ -1489,24 +2003,34 @@ export const ExplorarPage = () => {
         }
 
         const planRouteToDestination = (destinationCandidate: GridPoint, speedMultiplier = 1) => {
+          const enemyStart = { x: enemy.tileX, y: enemy.tileY };
+          const dynamicLayer = group.movementCollisionLayer.map((row) => row.slice());
+          for (const other of enemiesRef.current) {
+            if (other.id === enemy.id || !other.spawned || other.deathStartedAt > 0) {
+              continue;
+            }
+
+            if (other.tileY >= 0 && other.tileY < map.rows && other.tileX >= 0 && other.tileX < map.cols) {
+              dynamicLayer[other.tileY][other.tileX] = true;
+            }
+            if (other.moving && other.toY >= 0 && other.toY < map.rows && other.toX >= 0 && other.toX < map.cols) {
+              dynamicLayer[other.toY][other.toX] = true;
+            }
+          }
+          if (enemyStart.y >= 0 && enemyStart.y < map.rows && enemyStart.x >= 0 && enemyStart.x < map.cols) {
+            dynamicLayer[enemyStart.y][enemyStart.x] = false;
+          }
+
           let destination = destinationCandidate;
-          if (group.movementCollisionLayer[destination.y]?.[destination.x] === true) {
-            const adjusted =
-              findNearestWalkableInArea(destination, group.movementArea, map.collisionLayer) ??
-              findNearestWalkableTile(destination, group.movementCollisionLayer.map((row) => row.slice()));
-            if (!adjusted || group.movementCollisionLayer[adjusted.y]?.[adjusted.x] === true) {
+          if (dynamicLayer[destination.y]?.[destination.x] === true) {
+            const adjusted = findNearestWalkableTile(destination, dynamicLayer);
+            if (!adjusted || dynamicLayer[adjusted.y]?.[adjusted.x] === true) {
               return false;
             }
             destination = adjusted;
           }
 
-          const enemyStart = { x: enemy.tileX, y: enemy.tileY };
-          const layer = group.movementCollisionLayer.map((row) => row.slice());
-          if (enemyStart.y >= 0 && enemyStart.y < map.rows && enemyStart.x >= 0 && enemyStart.x < map.cols) {
-            layer[enemyStart.y][enemyStart.x] = false;
-          }
-
-          const route = findPathAStar(enemyStart, destination, layer, { allowCornerCut: false });
+          const route = findPathAStar(enemyStart, destination, dynamicLayer, { allowCornerCut: false });
           if (route.length <= 1) {
             return false;
           }
@@ -1515,19 +2039,61 @@ export const ExplorarPage = () => {
           if (!nextStep) {
             return false;
           }
-          startEnemyStep(enemy, group, nextStep, speedMultiplier);
-          return true;
+          return startEnemyStep(enemy, group, nextStep, speedMultiplier);
         };
 
         if (isAggro) {
+          if (shouldFlee) {
+            const fleeCandidates = enemyDirections
+              .map((direction) => ({ x: enemyTile.x + direction.x, y: enemyTile.y + direction.y }))
+              .filter((candidate) => canEnemyUseTile(enemy, group, candidate.x, candidate.y))
+              .sort((left, right) => {
+                const leftDx = left.x - playerTile.x;
+                const leftDy = left.y - playerTile.y;
+                const rightDx = right.x - playerTile.x;
+                const rightDy = right.y - playerTile.y;
+                const leftDistance = leftDx * leftDx + leftDy * leftDy;
+                const rightDistance = rightDx * rightDx + rightDy * rightDy;
+                return rightDistance - leftDistance;
+              });
+
+            let escaped = false;
+            if (fleeCandidates.length > 0) {
+              escaped = planRouteToDestination(fleeCandidates[0], ENEMY_COMBAT_SPEED_MULTIPLIER);
+            }
+
+            if (!escaped) {
+              const farDestinations = [...group.movementTiles]
+                .sort((left, right) => {
+                  const leftDx = left.x - playerTile.x;
+                  const leftDy = left.y - playerTile.y;
+                  const rightDx = right.x - playerTile.x;
+                  const rightDy = right.y - playerTile.y;
+                  const leftDistance = leftDx * leftDx + leftDy * leftDy;
+                  const rightDistance = rightDx * rightDx + rightDy * rightDy;
+                  return rightDistance - leftDistance;
+                })
+                .slice(0, 12);
+
+              for (const destination of farDestinations) {
+                if (planRouteToDestination(destination, ENEMY_COMBAT_SPEED_MULTIPLIER)) {
+                  escaped = true;
+                  break;
+                }
+              }
+            }
+
+            enemy.nextDecisionAt = now + (escaped ? 65 : 180);
+            continue;
+          }
+
           let chaseTarget: GridPoint | null = null;
           if (shouldOrbit) {
             const orbitCandidates = enemyDirections
               .map((direction) => ({ x: playerTile.x + direction.x, y: playerTile.y + direction.y }))
               .filter((candidate) => {
                 if (candidate.x === enemyTile.x && candidate.y === enemyTile.y) return false;
-                if (candidate.x < 0 || candidate.x >= map.cols || candidate.y < 0 || candidate.y >= map.rows) return false;
-                return group.movementCollisionLayer[candidate.y]?.[candidate.x] !== true;
+                return canEnemyUseTile(enemy, group, candidate.x, candidate.y);
               });
             chaseTarget = pickRandom(orbitCandidates);
           }
@@ -1538,7 +2104,7 @@ export const ExplorarPage = () => {
               findNearestWalkableTile(playerTile, group.movementCollisionLayer.map((row) => row.slice()));
           }
 
-          if (!chaseTarget || !planRouteToDestination(chaseTarget, 1.3)) {
+          if (!chaseTarget || !planRouteToDestination(chaseTarget, ENEMY_COMBAT_SPEED_MULTIPLIER)) {
             enemy.nextDecisionAt = now + (shouldOrbit ? 70 : 300);
           } else {
             enemy.nextDecisionAt = now + (shouldOrbit ? 55 : 90);
@@ -1678,7 +2244,7 @@ export const ExplorarPage = () => {
       }
 
       if (routeRef.current.length > 0) {
-        const hasTargetLock = Boolean(playerRef.current.trackingEnemyId);
+        const hasTargetLock = Boolean(playerRef.current.trackingEnemyId || collectingDropIdRef.current);
         const routePulse = 0.7 + (Math.sin(now / 120) + 1) * 0.15;
         context.strokeStyle = hasTargetLock ? `rgba(248, 113, 113, ${routePulse})` : "rgba(226, 232, 240, 0.5)";
         context.lineWidth = hasTargetLock ? 2.25 : 1.75;
@@ -1732,6 +2298,110 @@ export const ExplorarPage = () => {
       const entities: RenderableEntity[] = [];
       let entityOrder = 0;
 
+      for (const drop of groundDropsRef.current) {
+        if (drop.collecting) {
+          continue;
+        }
+
+        const sprite = drop.imageData ? dropImageMapRef.current.get(drop.id) ?? null : null;
+        const lifeRatio = clamp((drop.expiresAt - now) / DROP_TTL_MS, 0, 1);
+        const blink = lifeRatio < 0.25 ? (Math.sin(now / 70) + 1) * 0.5 : 1;
+        const alpha = clamp(0.35 + lifeRatio * 0.65, 0.25, 1) * blink;
+        const bob = Math.sin((now - drop.spawnedAt) / 170) * 1.8;
+        const drawSize = DROP_DRAW_SIZE;
+        const centerX = drop.worldX;
+        const baseY = drop.worldY;
+
+        entities.push({
+          depth: baseY,
+          order: entityOrder,
+          draw: () => {
+            context.save();
+            context.globalAlpha = 0.28 * alpha;
+            context.fillStyle = "rgba(0,0,0,1)";
+            context.beginPath();
+            context.ellipse(centerX, baseY + 2.2, drawSize * 0.32, drawSize * 0.14, 0, 0, Math.PI * 2);
+            context.fill();
+            context.restore();
+
+            context.save();
+            context.globalAlpha = alpha;
+            if (sprite && sprite.complete) {
+              context.drawImage(sprite, centerX - drawSize / 2, baseY - drawSize + bob, drawSize, drawSize);
+            } else {
+              context.fillStyle = "rgba(191, 219, 254, 0.95)";
+              context.fillRect(centerX - drawSize / 2, baseY - drawSize + bob, drawSize, drawSize);
+            }
+            context.restore();
+
+            if (drop.quantity > 1) {
+              context.save();
+              context.font = "700 10px Geist, sans-serif";
+              context.textAlign = "center";
+              context.textBaseline = "middle";
+              context.fillStyle = "rgba(248, 250, 252, 0.98)";
+              context.strokeStyle = "rgba(2, 6, 23, 0.95)";
+              context.lineWidth = 3.2;
+              const text = `x${drop.quantity}`;
+              context.strokeText(text, centerX, baseY - drawSize + 2 + bob);
+              context.fillText(text, centerX, baseY - drawSize + 2 + bob);
+              context.restore();
+            }
+          },
+        });
+        entityOrder += 1;
+      }
+
+      for (const otherPlayer of otherPlayersRef.current.values()) {
+        if (now - otherPlayer.updatedAtMs > 20_000) {
+          continue;
+        }
+
+        const centerX = otherPlayer.tileX * TILE_SIZE + TILE_SIZE / 2;
+        const baseY = otherPlayer.tileY * TILE_SIZE + TILE_SIZE;
+        const label = otherPlayer.username;
+        const bodyScale = clamp((otherPlayer.scaleX + otherPlayer.scaleY) / 2, 1.8, 3.2);
+        const bodyHeight = 16 * (bodyScale / 3);
+        const bodyWidth = 12 * (bodyScale / 3);
+
+        entities.push({
+          depth: baseY,
+          order: entityOrder,
+          draw: () => {
+            context.save();
+            context.fillStyle = "rgba(2, 6, 23, 0.32)";
+            context.beginPath();
+            context.ellipse(centerX, baseY - 2, Math.max(6, bodyWidth * 0.8), 3.2, 0, 0, Math.PI * 2);
+            context.fill();
+
+            context.fillStyle = "rgba(148, 163, 184, 0.92)";
+            context.fillRect(centerX - bodyWidth / 2, baseY - bodyHeight, bodyWidth, bodyHeight * 0.78);
+            context.fillStyle = "rgba(226, 232, 240, 0.96)";
+            context.beginPath();
+            context.arc(centerX, baseY - bodyHeight - 2.8, bodyWidth * 0.36, 0, Math.PI * 2);
+            context.fill();
+
+            context.font = "600 10px Geist, sans-serif";
+            const textWidth = Math.min(120, Math.max(42, context.measureText(label).width + 14));
+            const boxX = centerX - textWidth / 2;
+            const boxY = baseY - bodyHeight - 19;
+            drawRoundedRect(context, boxX, boxY, textWidth, 13, 4);
+            context.fillStyle = "rgba(2, 6, 23, 0.8)";
+            context.fill();
+            context.strokeStyle = "rgba(148, 163, 184, 0.42)";
+            context.lineWidth = 1;
+            context.stroke();
+
+            context.fillStyle = "rgba(248, 250, 252, 0.96)";
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            context.fillText(label, centerX, boxY + 6.5);
+            context.restore();
+          },
+        });
+        entityOrder += 1;
+      }
+
       for (const enemy of enemiesRef.current) {
         if (!enemy.spawned) {
           continue;
@@ -1754,7 +2424,15 @@ export const ExplorarPage = () => {
         const wave = Math.sin(movementProgress * Math.PI);
         const bobY = enemy.moving ? Math.abs(wave) * 2.2 : 0;
         const shadowPulse = enemy.moving ? Math.abs(wave) * 0.05 : 0;
+        const walkPhase = enemy.moving ? now / 86 + enemy.tileX * 0.43 + enemy.tileY * 0.27 : 0;
+        const walkSwing = enemy.moving ? Math.sin(walkPhase) * 0.07 : 0;
+        const walkStretch = enemy.moving ? Math.abs(Math.sin(walkPhase)) : 0;
+        const walkScaleX = enemy.moving ? 1 + walkStretch * 0.035 : 1;
+        const walkScaleY = enemy.moving ? 1 - walkStretch * 0.05 : 1;
+        const walkStepX = enemy.moving ? Math.cos(walkPhase) * 0.7 : 0;
         const baseFlip = group.flipHorizontal ? -1 : 1;
+        const directionalFlip = enemy.facingX > 0 ? -1 : 1;
+        const finalFlip = baseFlip * directionalFlip;
         const lungeProgress = enemy.attackLungeUntil > now ? 1 - (enemy.attackLungeUntil - now) / ATTACK_LUNGE_DURATION_MS : 0;
         const lungePingPong = lungeProgress < 0.5 ? lungeProgress * 2 : (1 - lungeProgress) * 2;
         const lungePhase = clamp(lungePingPong, 0, 1);
@@ -1770,6 +2448,12 @@ export const ExplorarPage = () => {
         const deathProgress = enemy.deathStartedAt > 0 ? clamp((now - enemy.deathStartedAt) / ENEMY_DEATH_DURATION_MS, 0, 1) : 0;
         const deathAlpha = 1 - deathProgress;
         const spawnProgress = enemy.spawnFxUntil > now ? 1 - (enemy.spawnFxUntil - now) / ENEMY_SPAWN_PORTAL_MS : 1;
+        const spawnReveal = enemy.deathStartedAt === 0 ? clamp(spawnProgress, 0, 1) : 1;
+        const spawnLift = enemy.deathStartedAt === 0 ? (1 - spawnReveal) * (drawHeight * 0.36 + 5) : 0;
+        let deathSeed = 0;
+        for (let index = 0; index < enemy.id.length; index += 1) {
+          deathSeed = ((deathSeed << 5) - deathSeed + enemy.id.charCodeAt(index)) | 0;
+        }
         const selected = selectedEnemyIdRef.current === enemy.id;
         const hpRatio = toHealthRatio(enemy.hp, enemy.maxHp);
         const healthWidth = clamp(drawWidth * 0.62, 30, 84);
@@ -1781,17 +2465,10 @@ export const ExplorarPage = () => {
           order: entityOrder,
           draw: () => {
             if (spawnProgress < 1 && enemy.deathStartedAt === 0) {
-              const portalRadius = 5 + spawnProgress * 10;
-              context.save();
-              context.globalAlpha = (1 - spawnProgress) * 0.75;
-              context.strokeStyle = "rgba(45, 212, 191, 0.88)";
-              context.lineWidth = 2;
-              context.beginPath();
-              context.ellipse(centerX, baseY - 2, portalRadius, portalRadius * 0.42, 0, 0, Math.PI * 2);
-              context.stroke();
-              context.restore();
+              drawEnemySpawnPortal(context, centerX, baseY + lungeOffsetY + enemyShakeY, drawWidth, spawnProgress, now);
             }
 
+            const shadowFade = (0.3 + spawnReveal * 0.7) * clamp(1 - deathProgress * 0.65, 0.25, 1);
             drawSpriteShadow(
               context,
               sprite,
@@ -1799,21 +2476,45 @@ export const ExplorarPage = () => {
               baseY + lungeOffsetY + enemyShakeY,
               drawWidth,
               drawHeight,
-              enemy.facingX * baseFlip,
-              0.15 + shadowPulse,
+              finalFlip,
+              (0.15 + shadowPulse) * shadowFade,
             );
 
             context.save();
             context.globalAlpha = deathAlpha;
-            context.translate(centerX + lungeOffsetX + enemyShakeX, baseY - bobY + lungeOffsetY + enemyShakeY - deathProgress * 8);
-            context.scale(enemy.facingX * baseFlip, 1);
-            if (deathProgress > 0) {
-              const collapse = 1 - deathProgress * 0.08;
-              context.scale(collapse, collapse);
+            context.translate(
+              centerX + lungeOffsetX + enemyShakeX + walkStepX,
+              baseY - bobY + lungeOffsetY + enemyShakeY + spawnLift - deathProgress * 8,
+            );
+            if (enemy.moving) {
+              context.rotate(walkSwing);
             }
+            context.scale(finalFlip * walkScaleX, walkScaleY);
             if (sprite) {
-              context.drawImage(sprite, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
-              if (enemy.hitFlashUntil > now) {
+              if (deathProgress > 0) {
+                drawSpriteDeathDissolve(context, sprite, spriteWidth, spriteHeight, drawWidth, drawHeight, deathProgress, deathSeed);
+              } else if (spawnReveal < 0.995) {
+                context.save();
+                context.beginPath();
+                context.rect(-drawWidth / 2, -drawHeight * spawnReveal, drawWidth, drawHeight * spawnReveal);
+                context.clip();
+                context.drawImage(sprite, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+                context.restore();
+
+                const glow = clamp((1 - spawnReveal) * 0.95, 0, 0.95);
+                if (glow > 0.01) {
+                  context.globalCompositeOperation = "lighter";
+                  context.globalAlpha = glow;
+                  context.fillStyle = "rgba(45, 212, 191, 0.24)";
+                  context.fillRect(-drawWidth * 0.45, -drawHeight * spawnReveal, drawWidth * 0.9, drawHeight * spawnReveal);
+                  context.globalCompositeOperation = "source-over";
+                  context.globalAlpha = deathAlpha;
+                }
+              } else {
+                context.drawImage(sprite, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+              }
+
+              if (enemy.hitFlashUntil > now && deathProgress <= 0) {
                 const flash = clamp((enemy.hitFlashUntil - now) / 130, 0, 1);
                 context.globalAlpha = flash * 0.7;
                 context.filter = "sepia(1) saturate(8) hue-rotate(-35deg) brightness(0.95)";
@@ -1872,6 +2573,12 @@ export const ExplorarPage = () => {
       const moveWave = Math.sin(moveT * Math.PI);
       const playerBobY = playerRef.current.moving ? Math.abs(moveWave) * 2.2 : 0;
       const playerShadowPulse = playerRef.current.moving ? Math.abs(moveWave) * 0.05 : 0;
+      const playerWalkPhase = playerRef.current.moving ? now / 86 + playerRef.current.tileX * 0.41 + playerRef.current.tileY * 0.33 : 0;
+      const playerWalkSwing = playerRef.current.moving ? Math.sin(playerWalkPhase) * 0.06 : 0;
+      const playerWalkStretch = playerRef.current.moving ? Math.abs(Math.sin(playerWalkPhase)) : 0;
+      const playerWalkScaleX = playerRef.current.moving ? 1 + playerWalkStretch * 0.032 : 1;
+      const playerWalkScaleY = playerRef.current.moving ? 1 - playerWalkStretch * 0.048 : 1;
+      const playerWalkStepX = playerRef.current.moving ? Math.cos(playerWalkPhase) * 0.66 : 0;
       const playerLungeProgress = playerRef.current.attackLungeUntil > now ? 1 - (playerRef.current.attackLungeUntil - now) / ATTACK_LUNGE_DURATION_MS : 0;
       const playerLungePingPong = playerLungeProgress < 0.5 ? playerLungeProgress * 2 : (1 - playerLungeProgress) * 2;
       const playerLungePhase = clamp(playerLungePingPong, 0, 1);
@@ -1885,9 +2592,19 @@ export const ExplorarPage = () => {
       const playerShakeX = playerShakeStrength > 0 ? Math.sin(now * 0.23 + 0.4) * 1.1 * playerShakeStrength : 0;
       const playerShakeY = playerShakeStrength > 0 ? Math.cos(now * 0.29 + 0.7) * 0.52 * playerShakeStrength : 0;
       const playerHpRatio = toHealthRatio(playerRef.current.hp, playerRef.current.maxHp);
+      const playerXpRatio = toHealthRatio(playerRef.current.experience, playerRef.current.experienceMax);
       const playerHealthWidth = clamp(spriteBaseWidth * 0.6, 36, 92);
-      const playerHealthX = playerCenterX - playerHealthWidth / 2;
-      const playerHealthY = playerBaseY - spriteBaseHeight - 11;
+      const playerPanelWidth = clamp(Math.max(playerHealthWidth + 30, 136), 136, 190);
+      const playerPanelHeight = 40;
+      const playerPanelPaddingX = 10;
+      const playerPanelPaddingTop = 6;
+      const playerPanelX = playerCenterX - playerPanelWidth / 2;
+      const playerPanelY = playerBaseY - spriteBaseHeight - 44;
+      const playerBarWidth = playerPanelWidth - playerPanelPaddingX * 2;
+      const playerHealthX = playerPanelX + playerPanelPaddingX;
+      const playerHealthY = playerPanelY + playerPanelPaddingTop + 9;
+      const playerXpY = playerHealthY + 8;
+      const playerLabel = `${playerRef.current.animaName} (Lv.${playerRef.current.level})`;
 
       entities.push({
         depth: playerBaseY,
@@ -1905,8 +2622,14 @@ export const ExplorarPage = () => {
           );
 
           context.save();
-          context.translate(playerCenterX + playerLungeOffsetX + playerShakeX, playerBaseY - playerBobY + playerLungeOffsetY + playerShakeY);
-          context.scale(playerRef.current.facingX * spriteBaseFlipRef.current, 1);
+          context.translate(
+            playerCenterX + playerLungeOffsetX + playerShakeX + playerWalkStepX,
+            playerBaseY - playerBobY + playerLungeOffsetY + playerShakeY,
+          );
+          if (playerRef.current.moving) {
+            context.rotate(playerWalkSwing);
+          }
+          context.scale(playerRef.current.facingX * spriteBaseFlipRef.current * playerWalkScaleX, playerWalkScaleY);
           if (playerSprite) {
             context.drawImage(playerSprite, -spriteBaseWidth / 2, -spriteBaseHeight, spriteBaseWidth, spriteBaseHeight);
             if (playerRef.current.hitFlashUntil > now) {
@@ -1924,14 +2647,41 @@ export const ExplorarPage = () => {
           }
           context.restore();
 
-          context.fillStyle = "rgba(15, 23, 42, 0.75)";
-          context.fillRect(playerHealthX, playerHealthY, playerHealthWidth, 4.5);
+          context.save();
+          drawRoundedRect(context, playerPanelX, playerPanelY, playerPanelWidth, playerPanelHeight, 9);
+          context.fillStyle = "rgba(2, 6, 23, 0.76)";
+          context.fill();
+          context.strokeStyle = "rgba(148, 163, 184, 0.34)";
+          context.lineWidth = 1;
+          context.stroke();
+
+          context.font = "600 10px Geist, sans-serif";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillStyle = "rgba(248, 250, 252, 0.97)";
+          context.fillText(playerLabel, playerCenterX, playerPanelY + playerPanelPaddingTop + 3);
+
+          drawRoundedRect(context, playerHealthX, playerHealthY, playerBarWidth, 5.2, 3);
+          context.fillStyle = "rgba(15, 23, 42, 0.9)";
+          context.fill();
+          drawRoundedRect(context, playerHealthX, playerHealthY, playerBarWidth * playerHpRatio, 5.2, 3);
           context.fillStyle =
             playerHpRatio > 0.45 ? "rgba(74, 222, 128, 0.96)" : playerHpRatio > 0.2 ? "rgba(250, 204, 21, 0.96)" : "rgba(248, 113, 113, 0.96)";
-          context.fillRect(playerHealthX, playerHealthY, playerHealthWidth * playerHpRatio, 4.5);
-          context.strokeStyle = "rgba(226, 232, 240, 0.75)";
-          context.lineWidth = 1;
-          context.strokeRect(playerHealthX - 0.5, playerHealthY - 0.5, playerHealthWidth + 1, 5.5);
+          context.fill();
+          drawRoundedRect(context, playerHealthX - 0.5, playerHealthY - 0.5, playerBarWidth + 1, 6.2, 3);
+          context.strokeStyle = "rgba(226, 232, 240, 0.52)";
+          context.stroke();
+
+          drawRoundedRect(context, playerHealthX, playerXpY, playerBarWidth, 4.4, 2.7);
+          context.fillStyle = "rgba(15, 23, 42, 0.9)";
+          context.fill();
+          drawRoundedRect(context, playerHealthX, playerXpY, playerBarWidth * playerXpRatio, 4.4, 2.7);
+          context.fillStyle = "rgba(96, 165, 250, 0.98)";
+          context.fill();
+          drawRoundedRect(context, playerHealthX - 0.5, playerXpY - 0.5, playerBarWidth + 1, 5.4, 2.7);
+          context.strokeStyle = "rgba(191, 219, 254, 0.52)";
+          context.stroke();
+          context.restore();
         },
       });
 
@@ -2021,7 +2771,7 @@ export const ExplorarPage = () => {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [buildNavigationCollisionLayer, cancelTracking, isWalkableForPlayer, mapData, persistState, pushAttackEffect, pushDamageText, tryStartMove]);
+  }, [buildNavigationCollisionLayer, cancelTracking, isWalkableForPlayer, mapData, persistState, pushAttackEffect, pushDamageText, setCanvasCursorMode, spawnGroundDropsForEnemy, tryStartMove]);
 
   return (
     <section className="space-y-4">
@@ -2034,63 +2784,89 @@ export const ExplorarPage = () => {
       {errorMessage ? <p className="text-sm text-red-500">{errorMessage}</p> : null}
       {loading ? <p className="text-sm text-muted-foreground">Carregando mapa...</p> : null}
 
-      <canvas
-        ref={canvasRef}
-        className="h-[74vh] min-h-[520px] w-full rounded-md border bg-black/30"
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          const world = pointerToWorld(event);
-          const tile = pointerToTile(event);
-          if (world) {
-            const enemy = findEnemyAtWorldPoint(world.x, world.y) ?? (tile ? findEnemyAtTile(tile) : null);
-            if (enemy) {
-              mouseHeldRef.current = false;
-              routeRef.current = [];
-              routeAllowsCornerCutRef.current = false;
-              selectedEnemyIdRef.current = enemy.id;
-              playerRef.current.trackingEnemyId = enemy.id;
-              playerRef.current.nextTrackingPathAt = 0;
-              engagedEnemyIdRef.current = enemy.id;
-              for (const runtimeEnemy of enemiesRef.current) {
-                if (runtimeEnemy.id !== enemy.id) {
-                  runtimeEnemy.aggroUntilAt = 0;
-                  runtimeEnemy.route = [];
-                }
+      <div className="relative">
+        <canvas
+          ref={canvasRef}
+          className="h-[74vh] min-h-[520px] w-full rounded-md border bg-black/30"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            const world = pointerToWorld(event);
+            const tile = pointerToTile(event);
+            if (world) {
+              const drop = findDropAtWorldPoint(world.x, world.y);
+              if (drop) {
+                mouseHeldRef.current = false;
+                routeRef.current = [];
+                routeAllowsCornerCutRef.current = false;
+                selectedEnemyIdRef.current = null;
+                playerRef.current.trackingEnemyId = null;
+                playerRef.current.nextTrackingPathAt = 0;
+                collectingDropIdRef.current = drop.id;
+                recalculatePath({ x: drop.tileX, y: drop.tileY });
+                return;
               }
-              enemy.aggroUntilAt = performance.now() + ENEMY_AGGRO_DURATION_MS;
+
+              const enemy = findEnemyAtWorldPoint(world.x, world.y) ?? (tile ? findEnemyAtTile(tile) : null);
+              if (enemy) {
+                mouseHeldRef.current = false;
+                routeRef.current = [];
+                routeAllowsCornerCutRef.current = false;
+                collectingDropIdRef.current = null;
+                selectedEnemyIdRef.current = enemy.id;
+                playerRef.current.trackingEnemyId = enemy.id;
+                playerRef.current.nextTrackingPathAt = 0;
+                engagedEnemyIdRef.current = enemy.id;
+                for (const runtimeEnemy of enemiesRef.current) {
+                  if (runtimeEnemy.id !== enemy.id) {
+                    runtimeEnemy.aggroUntilAt = 0;
+                    runtimeEnemy.route = [];
+                  }
+                }
+                enemy.aggroUntilAt = performance.now() + ENEMY_AGGRO_DURATION_MS;
+                return;
+              }
+            }
+
+            cancelTracking();
+            if (portalPromptRef.current && !teleportingRef.current) {
+              suppressPortalPromptUntilLeaveRef.current = true;
+              setPortalPrompt(null);
+            }
+            collectingDropIdRef.current = null;
+            mouseHeldRef.current = true;
+            hoverTargetRef.current = tile;
+            recalculatePath(tile);
+          }}
+          onPointerMove={(event) => {
+            const world = pointerToWorld(event);
+            if (world && findDropAtWorldPoint(world.x, world.y)) {
+              setCanvasCursorMode("copy");
+            } else {
+              setCanvasCursorMode("default");
+            }
+
+            const point = pointerToTile(event);
+            if (!point) {
+              hoverTargetRef.current = null;
               return;
             }
-          }
-
-          cancelTracking();
-          if (portalPromptRef.current && !teleportingRef.current) {
-            suppressPortalPromptUntilLeaveRef.current = true;
-            setPortalPrompt(null);
-          }
-          mouseHeldRef.current = true;
-          hoverTargetRef.current = tile;
-          recalculatePath(tile);
-        }}
-        onPointerMove={(event) => {
-          const point = pointerToTile(event);
-          if (!point) {
+            if (hoverTargetRef.current && pointsEqual(hoverTargetRef.current, point)) return;
+            hoverTargetRef.current = point;
+            if (mouseHeldRef.current) {
+              recalculatePath(point);
+            }
+          }}
+          onPointerUp={() => {
+            mouseHeldRef.current = false;
+          }}
+          onPointerLeave={() => {
+            mouseHeldRef.current = false;
             hoverTargetRef.current = null;
-            return;
-          }
-          if (hoverTargetRef.current && pointsEqual(hoverTargetRef.current, point)) return;
-          hoverTargetRef.current = point;
-          if (mouseHeldRef.current) {
-            recalculatePath(point);
-          }
-        }}
-        onPointerUp={() => {
-          mouseHeldRef.current = false;
-        }}
-        onPointerLeave={() => {
-          mouseHeldRef.current = false;
-          hoverTargetRef.current = null;
-        }}
-      />
+            setCanvasCursorMode("default");
+          }}
+        />
+        <FloatingBagMenu embedded />
+      </div>
 
       <Dialog
         open={Boolean(portalPrompt)}

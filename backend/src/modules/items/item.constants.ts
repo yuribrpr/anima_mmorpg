@@ -1,0 +1,28 @@
+import type { ItemGalleryEntry } from "../../types/item";
+
+export const DEFAULT_ITEM_IMAGE_GALLERY: ItemGalleryEntry[] = [
+  { id: "potion", name: "Potion", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/potion.png" },
+  { id: "super-potion", name: "Super Potion", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/super-potion.png" },
+  { id: "hyper-potion", name: "Hyper Potion", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/hyper-potion.png" },
+  { id: "max-potion", name: "Max Potion", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/max-potion.png" },
+  { id: "full-restore", name: "Full Restore", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/full-restore.png" },
+  { id: "rare-candy", name: "Rare Candy", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/rare-candy.png" },
+  { id: "nugget", name: "Nugget", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/nugget.png" },
+  { id: "big-nugget", name: "Big Nugget", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/big-nugget.png" },
+  { id: "revive", name: "Revive", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/revive.png" },
+  { id: "max-revive", name: "Max Revive", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/max-revive.png" },
+  { id: "ether", name: "Ether", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/ether.png" },
+  { id: "max-ether", name: "Max Ether", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/max-ether.png" },
+  { id: "elixir", name: "Elixir", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/elixir.png" },
+  { id: "max-elixir", name: "Max Elixir", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/max-elixir.png" },
+  { id: "protein", name: "Protein", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/protein.png" },
+  { id: "iron", name: "Iron", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/iron.png" },
+  { id: "hp-up", name: "HP Up", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/hp-up.png" },
+  { id: "zinc", name: "Zinc", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/zinc.png" },
+  { id: "carbos", name: "Carbos", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/carbos.png" },
+  { id: "x-attack", name: "X Attack", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/x-attack.png" },
+  { id: "x-defense", name: "X Defense", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/x-defense.png" },
+  { id: "pokeball", name: "Pokeball", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/poke-ball.png" },
+  { id: "greatball", name: "Great Ball", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/great-ball.png" },
+  { id: "ultraball", name: "Ultra Ball", imageUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/ultra-ball.png" },
+];

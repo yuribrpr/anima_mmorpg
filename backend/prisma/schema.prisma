@@ -20,6 +20,12 @@ enum UserRole {
   ADMIN
 }
 
+enum ItemType {
+  CONSUMIVEL
+  QUEST
+  NORMAL
+}
+
 model User {
   id            String         @id @default(cuid())
   email         String         @unique
@@ -28,6 +34,7 @@ model User {
   role          UserRole       @default(PLAYER)
   adoptedAnimas AdoptedAnima[]
   mapStates     PlayerMapState[]
+  inventory     UserInventory?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 }
@@ -138,9 +145,72 @@ model BestiaryAnima {
   powerLevel         PowerLevel
   bitsDrop           Int
   xpDrop             Int
+  drops              BestiaryDrop[]
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
 
   @@index([name])
   @@index([powerLevel])
+}
+
+model UserInventory {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  bits      Int      @default(3865)
+  crystals  Int      @default(43)
+  layout    Json
+  items     UserInventoryItem[]
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Item {
+  id               String              @id @default(cuid())
+  name             String
+  description      String
+  type             ItemType
+  imageData        String?             @db.LongText
+  stackSize        Int                 @default(99)
+  healPercentMaxHp Float               @default(0)
+  bonusAttack      Int                 @default(0)
+  bonusDefense     Int                 @default(0)
+  bonusMaxHp       Int                 @default(0)
+  drops            BestiaryDrop[]
+  inventoryItems   UserInventoryItem[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([name])
+  @@index([type])
+}
+
+model BestiaryDrop {
+  id             String       @id @default(cuid())
+  bestiaryAnimaId String
+  itemId         String
+  quantity       Int          @default(1)
+  dropChance     Float
+  bestiaryAnima  BestiaryAnima @relation(fields: [bestiaryAnimaId], references: [id], onDelete: Cascade)
+  item           Item         @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([bestiaryAnimaId])
+  @@index([itemId])
+}
+
+model UserInventoryItem {
+  id          String        @id @default(cuid())
+  inventoryId String
+  itemId      String
+  quantity    Int           @default(1)
+  slot        Int?
+  inventory   UserInventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  item        Item          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([inventoryId, itemId])
+  @@index([inventoryId, slot])
 }

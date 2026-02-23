@@ -1,27 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, ChevronsUpDown, Pencil, Plus, Trash2 } from "lucide-react";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { Heart, Pencil, Plus, Shield, Sparkles, Swords, Timer, Trash2 } from "lucide-react";
+import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { getPowerScale } from "@/lib/anima-power-scale";
 import { createAnima, deleteAnima, listAnimas, updateAnima } from "@/lib/animas";
 import { ApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { POWER_LEVEL_OPTIONS, type Anima, type CreateAnimaInput, type PowerLevel } from "@/types/anima";
 import { ImageCropFlipField } from "@/components/common/ImageCropFlipField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const animaSchema = z.object({
-  name: z.string().min(2, "Informe o nome do Anima"),
+  name: z.string().min(2, "Informe o nome"),
   attack: z.number().int().min(1),
   attackSpeedSeconds: z.number().min(0.1),
   critChance: z.number().min(0).max(100),
@@ -52,8 +47,6 @@ const defaultFormValues: AnimaFormValues = {
   nextEvolutionId: null,
 };
 
-const powerLabel = (value: PowerLevel) => POWER_LEVEL_OPTIONS.find((item) => item.value === value)?.label ?? value;
-
 const toPayload = (values: AnimaFormValues): CreateAnimaInput => ({
   name: values.name,
   attack: values.attack,
@@ -69,314 +62,274 @@ const toPayload = (values: AnimaFormValues): CreateAnimaInput => ({
   nextEvolutionId: values.nextEvolutionId,
 });
 
-const applyScaleToForm = (form: UseFormReturn<AnimaFormValues>, level: PowerLevel, setScalePercent: (value: number) => void) => {
+const powerLabel = (value: PowerLevel) => POWER_LEVEL_OPTIONS.find((item) => item.value === value)?.label ?? value;
+
+const applyPowerScale = (form: ReturnType<typeof useForm<AnimaFormValues>>, level: PowerLevel) => {
   const scaled = getPowerScale(level);
-  setScalePercent(scaled.scalePercent);
-  form.setValue("attack", scaled.values.attack);
-  form.setValue("attackSpeedSeconds", scaled.values.attackSpeedSeconds);
-  form.setValue("critChance", scaled.values.critChance);
-  form.setValue("agility", scaled.values.agility);
-  form.setValue("defense", scaled.values.defense);
-  form.setValue("maxHp", scaled.values.maxHp);
+  form.setValue("attack", scaled.values.attack, { shouldDirty: true });
+  form.setValue("attackSpeedSeconds", scaled.values.attackSpeedSeconds, { shouldDirty: true });
+  form.setValue("critChance", scaled.values.critChance, { shouldDirty: true });
+  form.setValue("agility", scaled.values.agility, { shouldDirty: true });
+  form.setValue("defense", scaled.values.defense, { shouldDirty: true });
+  form.setValue("maxHp", scaled.values.maxHp, { shouldDirty: true });
 };
 
-type FormSectionProps = {
-  form: UseFormReturn<AnimaFormValues>;
-  animas: Anima[];
-  scalePercent: number | null;
-  setScalePercent: (value: number) => void;
-  powerComboboxOpen: boolean;
-  setPowerComboboxOpen: (value: boolean) => void;
-  evolutionComboboxOpen: boolean;
-  setEvolutionComboboxOpen: (value: boolean) => void;
-  excludeEvolutionId?: string;
-};
-
-const AnimaFormSection = ({
+const AnimaFormFields = ({
   form,
   animas,
-  scalePercent,
-  setScalePercent,
-  powerComboboxOpen,
-  setPowerComboboxOpen,
-  evolutionComboboxOpen,
-  setEvolutionComboboxOpen,
   excludeEvolutionId,
-}: FormSectionProps) => {
+}: {
+  form: ReturnType<typeof useForm<AnimaFormValues>>;
+  animas: Anima[];
+  excludeEvolutionId?: string;
+}) => {
+  const selectedPowerLevel = form.watch("powerLevel");
   const selectedNextEvolutionId = form.watch("nextEvolutionId");
   const selectedNextEvolution = useMemo(
     () => animas.find((anima) => anima.id === selectedNextEvolutionId) ?? null,
     [animas, selectedNextEvolutionId],
   );
-
   const evolutionOptions = useMemo(
     () => animas.filter((anima) => anima.id !== excludeEvolutionId),
     [animas, excludeEvolutionId],
   );
+  const recommendedScale = getPowerScale(selectedPowerLevel);
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-2">
-        <FormField
-          control={form.control}
-          name="name"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Nome</FormLabel>
-              <FormControl>
-                <Input placeholder="Ex: Drakoid" {...field} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="powerLevel"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Nível de Poder</FormLabel>
-              <Popover open={powerComboboxOpen} onOpenChange={setPowerComboboxOpen}>
-                <PopoverTrigger asChild>
+    <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
+      <div className="space-y-4">
+        <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Identificacao</p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Nome</FormLabel>
                   <FormControl>
-                    <Button variant="outline" role="combobox" className="w-full justify-between">
-                      {powerLabel(field.value)}
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
+                    <Input placeholder="Ex: Drakoid" {...field} />
                   </FormControl>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
-                  <Command>
-                    <CommandInput placeholder="Buscar nível..." />
-                    <CommandList>
-                      <CommandEmpty>Nenhum nível encontrado.</CommandEmpty>
-                      <CommandGroup>
-                        {POWER_LEVEL_OPTIONS.map((option) => (
-                          <CommandItem
-                            key={option.value}
-                            value={`${option.label} ${option.value}`}
-                            onSelect={() => {
-                              field.onChange(option.value);
-                              applyScaleToForm(form, option.value, setScalePercent);
-                              setPowerComboboxOpen(false);
-                            }}
-                          >
-                            <Check className={cn("mr-2 h-4 w-4", field.value === option.value ? "opacity-100" : "opacity-0")} />
-                            {option.label}
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              <p className="text-xs text-muted-foreground">Escala aplicada: {scalePercent ?? "-"}%</p>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <FormField
-          control={form.control}
-          name="attack"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Ataque</FormLabel>
-              <FormControl>
-                <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="attackSpeedSeconds"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Vel. Ataque (s)</FormLabel>
-              <FormControl>
-                <Input type="number" step="0.01" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="critChance"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>% Crítico</FormLabel>
-              <FormControl>
-                <Input type="number" step="0.1" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="agility"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Agilidade</FormLabel>
-              <FormControl>
-                <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="defense"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Defesa</FormLabel>
-              <FormControl>
-                <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="maxHp"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Vida Máxima</FormLabel>
-              <FormControl>
-                <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <ImageCropFlipField
-          value={form.watch("imageData")}
-          flipHorizontalValue={form.watch("flipHorizontal")}
-          onFlipHorizontalChange={(flipHorizontal) =>
-            form.setValue("flipHorizontal", flipHorizontal, {
-              shouldDirty: true,
-              shouldTouch: true,
-              shouldValidate: true,
-            })
-          }
-          onChange={(imageData) =>
-            form.setValue("imageData", imageData, {
-              shouldDirty: true,
-              shouldTouch: true,
-              shouldValidate: true,
-            })
-          }
-          label="Imagem (Upload local)"
-        />
-        <FormField
-          control={form.control}
-          name="spriteScale"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Escala do Sprite</FormLabel>
-              <FormControl>
-                <Input
-                  type="number"
-                  step={0.1}
-                  inputMode="decimal"
-                  value={field.value}
-                  onChange={(event) => {
-                    const parsed = Number(event.target.value.replace(",", "."));
-                    field.onChange(Number.isFinite(parsed) ? parsed : field.value);
-                  }}
-                  onBlur={() => field.onChange(Math.max(0.1, field.value))}
-                />
-              </FormControl>
-              <p className="text-xs text-muted-foreground">Padrao 3x. Sem limite maximo.</p>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="nextEvolutionId"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Próxima Evolução</FormLabel>
-              <Popover open={evolutionComboboxOpen} onOpenChange={setEvolutionComboboxOpen}>
-                <PopoverTrigger asChild>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="powerLevel"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Nivel de poder</FormLabel>
                   <FormControl>
-                    <Button variant="outline" role="combobox" className="w-full justify-between">
-                      {field.value ? animas.find((anima) => anima.id === field.value)?.name ?? "Selecionar" : "Selecionar"}
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
+                    <select
+                      className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                      value={field.value}
+                      onChange={(event) => {
+                        const nextLevel = event.target.value as PowerLevel;
+                        field.onChange(nextLevel);
+                        applyPowerScale(form, nextLevel);
+                      }}
+                    >
+                      {POWER_LEVEL_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </FormControl>
-                </PopoverTrigger>
-                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
-                  <Command>
-                    <CommandInput placeholder="Buscar Anima..." />
-                    <CommandList>
-                      <CommandEmpty>Nenhum Anima encontrado.</CommandEmpty>
-                      <CommandGroup>
-                        <CommandItem
-                          value="sem-evolucao"
-                          onSelect={() => {
-                            field.onChange(null);
-                            setEvolutionComboboxOpen(false);
-                          }}
-                        >
-                          <Check className={cn("mr-2 h-4 w-4", !field.value ? "opacity-100" : "opacity-0")} />
-                          Sem evolução
-                        </CommandItem>
-                        {evolutionOptions.map((anima) => (
-                          <CommandItem
-                            key={anima.id}
-                            value={`${anima.name} ${anima.powerLevel}`}
-                            onSelect={() => {
-                              field.onChange(anima.id);
-                              setEvolutionComboboxOpen(false);
-                            }}
-                          >
-                            <Check className={cn("mr-2 h-4 w-4", field.value === anima.id ? "opacity-100" : "opacity-0")} />
-                            {anima.name}
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-      </div>
+                  <p className="text-xs text-muted-foreground">Escala recomendada: {recommendedScale.scalePercent}%</p>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
 
-      {selectedNextEvolution ? (
-        <Card className="bg-muted/20">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm">Referência da próxima evolução</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center gap-3">
-            {selectedNextEvolution.imageData ? (
-              <img src={selectedNextEvolution.imageData} alt={selectedNextEvolution.name} className="h-16 w-16 rounded-md border border-border object-cover" />
-            ) : (
-              <div className="h-16 w-16 rounded-md border border-border bg-muted" />
+          <FormField
+            control={form.control}
+            name="nextEvolutionId"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Proxima evolucao</FormLabel>
+                <FormControl>
+                  <select
+                    className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                    value={field.value ?? ""}
+                    onChange={(event) => field.onChange(event.target.value || null)}
+                  >
+                    <option value="">Sem evolucao</option>
+                    {evolutionOptions.map((anima) => (
+                      <option key={anima.id} value={anima.id}>
+                        {anima.name}
+                      </option>
+                    ))}
+                  </select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
             )}
-            <div>
-              <p className="font-medium">{selectedNextEvolution.name}</p>
-              <p className="text-xs text-muted-foreground">{powerLabel(selectedNextEvolution.powerLevel)}</p>
+          />
+        </div>
+
+        <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status de combate</p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField
+              control={form.control}
+              name="attack"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Ataque</FormLabel>
+                  <FormControl>
+                    <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="defense"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Defesa</FormLabel>
+                  <FormControl>
+                    <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="agility"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Agilidade</FormLabel>
+                  <FormControl>
+                    <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="maxHp"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Vida maxima</FormLabel>
+                  <FormControl>
+                    <Input type="number" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="attackSpeedSeconds"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Velocidade de ataque (s)</FormLabel>
+                  <FormControl>
+                    <Input type="number" step="0.01" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="critChance"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Critico (%)</FormLabel>
+                  <FormControl>
+                    <Input type="number" step="0.1" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sprite</p>
+          <ImageCropFlipField
+            value={form.watch("imageData")}
+            flipHorizontalValue={form.watch("flipHorizontal")}
+            onFlipHorizontalChange={(flipHorizontal) => form.setValue("flipHorizontal", flipHorizontal, { shouldDirty: true })}
+            onChange={(imageData) => form.setValue("imageData", imageData, { shouldDirty: true })}
+            label="Imagem do anima"
+          />
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField
+              control={form.control}
+              name="spriteScale"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Escala do sprite</FormLabel>
+                  <FormControl>
+                    <Input type="number" step="0.1" value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="flipHorizontal"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Orientacao base</FormLabel>
+                  <FormControl>
+                    <label className="flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm">
+                      <input type="checkbox" checked={field.value} onChange={(event) => field.onChange(event.target.checked)} className="h-4 w-4" />
+                      Inverter horizontalmente
+                    </label>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
+
+        {form.watch("imageData") ? (
+          <div className="rounded-lg border bg-muted/20 p-4">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Preview orientacao</p>
+            <div className="flex items-center justify-center rounded-md border bg-background/60 p-3">
+              <img
+                src={form.watch("imageData") ?? ""}
+                alt="Preview do anima"
+                className="h-24 w-24 object-contain"
+                style={{ transform: form.watch("flipHorizontal") ? "scaleX(-1)" : "scaleX(1)", imageRendering: "pixelated" }}
+              />
             </div>
-          </CardContent>
-        </Card>
-      ) : null}
+            <p className="mt-2 text-xs text-muted-foreground">{form.watch("flipHorizontal") ? "Estado: invertido" : "Estado: normal"}</p>
+          </div>
+        ) : null}
+
+        {selectedNextEvolution ? (
+          <div className="rounded-lg border bg-muted/20 p-4">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Preview da evolucao</p>
+            <div className="flex items-center gap-3 rounded-md border bg-background/60 p-3">
+              {selectedNextEvolution.imageData ? (
+                <img src={selectedNextEvolution.imageData} alt={selectedNextEvolution.name} className="h-14 w-14 object-contain" />
+              ) : (
+                <div className="h-14 w-14 rounded-md border bg-muted" />
+              )}
+              <div>
+                <p className="text-sm font-semibold">{selectedNextEvolution.name}</p>
+                <p className="text-xs text-muted-foreground">{powerLabel(selectedNextEvolution.powerLevel)}</p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 };
@@ -386,16 +339,9 @@ export const AdminAnimasPage = () => {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [openCreateModal, setOpenCreateModal] = useState(false);
-  const [openEditModal, setOpenEditModal] = useState(false);
-  const [editingAnima, setEditingAnima] = useState<Anima | null>(null);
-
-  const [createScalePercent, setCreateScalePercent] = useState<number | null>(null);
-  const [editScalePercent, setEditScalePercent] = useState<number | null>(null);
-  const [createPowerOpen, setCreatePowerOpen] = useState(false);
-  const [createEvolutionOpen, setCreateEvolutionOpen] = useState(false);
-  const [editPowerOpen, setEditPowerOpen] = useState(false);
-  const [editEvolutionOpen, setEditEvolutionOpen] = useState(false);
-
+  const [selectedAnimaId, setSelectedAnimaId] = useState<string | null>(null);
+  const [selectedTab, setSelectedTab] = useState<"details" | "edit">("details");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     search: "",
     powerLevel: "ALL" as "ALL" | PowerLevel,
@@ -407,7 +353,6 @@ export const AdminAnimasPage = () => {
     resolver: zodResolver(animaSchema),
     defaultValues: defaultFormValues,
   });
-
   const editForm = useForm<AnimaFormValues>({
     resolver: zodResolver(animaSchema),
     defaultValues: defaultFormValues,
@@ -423,7 +368,7 @@ export const AdminAnimasPage = () => {
       if (error instanceof ApiError) {
         setErrorMessage(error.message);
       } else {
-        setErrorMessage("Não foi possível carregar os Animas.");
+        setErrorMessage("Nao foi possivel carregar os animas.");
       }
     } finally {
       setLoading(false);
@@ -434,47 +379,12 @@ export const AdminAnimasPage = () => {
     void fetchAnimas();
   }, []);
 
-  const filteredAnimas = useMemo(() => {
-    return animas.filter((anima) => {
-      if (filters.search && !anima.name.toLowerCase().includes(filters.search.toLowerCase())) {
-        return false;
-      }
+  const selectedAnima = useMemo(
+    () => (selectedAnimaId ? animas.find((anima) => anima.id === selectedAnimaId) ?? null : null),
+    [animas, selectedAnimaId],
+  );
 
-      if (filters.powerLevel !== "ALL" && anima.powerLevel !== filters.powerLevel) {
-        return false;
-      }
-
-      if (filters.minAttack && anima.attack < Number(filters.minAttack)) {
-        return false;
-      }
-
-      if (filters.minDefense && anima.defense < Number(filters.minDefense)) {
-        return false;
-      }
-
-      return true;
-    });
-  }, [animas, filters]);
-
-  const handleCreate = async (values: AnimaFormValues) => {
-    try {
-      await createAnima(toPayload(values));
-      setOpenCreateModal(false);
-      createForm.reset(defaultFormValues);
-      setCreateScalePercent(null);
-      await fetchAnimas();
-    } catch (error) {
-      if (error instanceof ApiError) {
-        setErrorMessage(error.message);
-      } else {
-        setErrorMessage("Não foi possível criar o Anima.");
-      }
-    }
-  };
-
-  const openEdit = (anima: Anima) => {
-    setEditingAnima(anima);
-    setEditScalePercent(null);
+  const loadEditForm = (anima: Anima) => {
     editForm.reset({
       name: anima.name,
       attack: anima.attack,
@@ -489,76 +399,121 @@ export const AdminAnimasPage = () => {
       powerLevel: anima.powerLevel,
       nextEvolutionId: anima.nextEvolutionId,
     });
-    setOpenEditModal(true);
+  };
+
+  useEffect(() => {
+    if (selectedAnima) {
+      loadEditForm(selectedAnima);
+    }
+  }, [selectedAnima]);
+
+  const filteredAnimas = useMemo(() => {
+    return [...animas]
+      .filter((anima) => {
+        if (filters.search && !anima.name.toLowerCase().includes(filters.search.toLowerCase())) {
+          return false;
+        }
+        if (filters.powerLevel !== "ALL" && anima.powerLevel !== filters.powerLevel) {
+          return false;
+        }
+        if (filters.minAttack && anima.attack < Number(filters.minAttack)) {
+          return false;
+        }
+        if (filters.minDefense && anima.defense < Number(filters.minDefense)) {
+          return false;
+        }
+        return true;
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }, [animas, filters]);
+
+  const handleCreate = async (values: AnimaFormValues) => {
+    try {
+      await createAnima(toPayload(values));
+      setOpenCreateModal(false);
+      createForm.reset(defaultFormValues);
+      await fetchAnimas();
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("Falha ao criar anima.");
+      }
+    }
   };
 
   const handleUpdate = async (values: AnimaFormValues) => {
-    if (!editingAnima) {
-      return;
-    }
-
+    if (!selectedAnima) return;
     try {
-      await updateAnima(editingAnima.id, toPayload(values));
-      setOpenEditModal(false);
-      setEditingAnima(null);
+      await updateAnima(selectedAnima.id, toPayload(values));
       await fetchAnimas();
+      setSelectedTab("details");
     } catch (error) {
       if (error instanceof ApiError) {
         setErrorMessage(error.message);
       } else {
-        setErrorMessage("Não foi possível editar o Anima.");
+        setErrorMessage("Falha ao editar anima.");
       }
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (anima: Anima) => {
+    if (!window.confirm(`Excluir o anima "${anima.name}"?`)) {
+      return;
+    }
+
+    setDeletingId(anima.id);
     try {
-      await deleteAnima(id);
+      await deleteAnima(anima.id);
+      if (selectedAnimaId === anima.id) {
+        setSelectedAnimaId(null);
+      }
       await fetchAnimas();
     } catch (error) {
       if (error instanceof ApiError) {
         setErrorMessage(error.message);
       } else {
-        setErrorMessage("Não foi possível excluir o Anima.");
+        setErrorMessage("Falha ao excluir anima.");
       }
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const openAnimaModal = (anima: Anima, tab: "details" | "edit" = "details") => {
+    setSelectedAnimaId(anima.id);
+    setSelectedTab(tab);
+    if (tab === "edit") {
+      loadEditForm(anima);
     }
   };
 
   return (
     <section className="space-y-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Biblioteca de Animas</h1>
-          <p className="text-sm text-muted-foreground">Gerenciador global de Animas dos jogadores.</p>
+          <h1 className="text-3xl font-semibold tracking-tight">Biblioteca de animas</h1>
+          <p className="text-sm text-muted-foreground">Gerencie animas com visual em cards, modal de detalhes e edicao integrada.</p>
         </div>
 
         <Dialog open={openCreateModal} onOpenChange={setOpenCreateModal}>
           <DialogTrigger asChild>
             <Button className="gap-2">
               <Plus className="h-4 w-4" />
-              Criar Anima
+              Criar anima
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-6xl">
             <DialogHeader>
-              <DialogTitle>Novo Anima</DialogTitle>
-              <DialogDescription>Preencha os atributos do Anima.</DialogDescription>
+              <DialogTitle>Novo anima</DialogTitle>
+              <DialogDescription>Configure status, sprite e cadeia de evolucao.</DialogDescription>
             </DialogHeader>
             <Form {...createForm}>
               <form className="space-y-4" onSubmit={createForm.handleSubmit(handleCreate)}>
-                <AnimaFormSection
-                  form={createForm}
-                  animas={animas}
-                  scalePercent={createScalePercent}
-                  setScalePercent={setCreateScalePercent}
-                  powerComboboxOpen={createPowerOpen}
-                  setPowerComboboxOpen={setCreatePowerOpen}
-                  evolutionComboboxOpen={createEvolutionOpen}
-                  setEvolutionComboboxOpen={setCreateEvolutionOpen}
-                />
+                <AnimaFormFields form={createForm} animas={animas} />
                 <DialogFooter>
                   <Button type="submit" disabled={createForm.formState.isSubmitting}>
-                    {createForm.formState.isSubmitting ? "Criando..." : "Criar Anima"}
+                    {createForm.formState.isSubmitting ? "Criando..." : "Criar anima"}
                   </Button>
                 </DialogFooter>
               </form>
@@ -567,178 +522,217 @@ export const AdminAnimasPage = () => {
         </Dialog>
       </header>
 
-      <Dialog open={openEditModal} onOpenChange={setOpenEditModal}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Editar Anima</DialogTitle>
-            <DialogDescription>Atualize os atributos do Anima selecionado.</DialogDescription>
-          </DialogHeader>
-          <Form {...editForm}>
-            <form className="space-y-4" onSubmit={editForm.handleSubmit(handleUpdate)}>
-              <AnimaFormSection
-                form={editForm}
-                animas={animas}
-                scalePercent={editScalePercent}
-                setScalePercent={setEditScalePercent}
-                powerComboboxOpen={editPowerOpen}
-                setPowerComboboxOpen={setEditPowerOpen}
-                evolutionComboboxOpen={editEvolutionOpen}
-                setEvolutionComboboxOpen={setEditEvolutionOpen}
-                excludeEvolutionId={editingAnima?.id}
-              />
-              <DialogFooter>
-                <Button type="submit" disabled={editForm.formState.isSubmitting}>
-                  {editForm.formState.isSubmitting ? "Salvando..." : "Salvar alterações"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
+      {errorMessage ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{errorMessage}</p> : null}
 
       <Card>
         <CardHeader>
           <CardTitle>Filtros</CardTitle>
-          <CardDescription>Filtros dinâmicos para visualizar todos os Animas.</CardDescription>
+          <CardDescription>Filtre por nome, nivel de poder e status minimos.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-4">
-          <Input
-            placeholder="Buscar por nome"
-            value={filters.search}
-            onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
-          />
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="justify-between">
-                {filters.powerLevel === "ALL" ? "Todos os níveis" : powerLabel(filters.powerLevel)}
-                <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="p-0">
-              <Command>
-                <CommandInput placeholder="Buscar nível..." />
-                <CommandList>
-                  <CommandGroup>
-                    <CommandItem onSelect={() => setFilters((current) => ({ ...current, powerLevel: "ALL" }))}>Todos os níveis</CommandItem>
-                    {POWER_LEVEL_OPTIONS.map((option) => (
-                      <CommandItem key={option.value} onSelect={() => setFilters((current) => ({ ...current, powerLevel: option.value }))}>
-                        {option.label}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-          <Input
-            type="number"
-            placeholder="Ataque mínimo"
-            value={filters.minAttack}
-            onChange={(event) => setFilters((current) => ({ ...current, minAttack: event.target.value }))}
-          />
-          <Input
-            type="number"
-            placeholder="Defesa mínima"
-            value={filters.minDefense}
-            onChange={(event) => setFilters((current) => ({ ...current, minDefense: event.target.value }))}
-          />
+          <Input placeholder="Buscar por nome..." value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} />
+          <select
+            className="h-10 rounded-md border bg-background px-3 text-sm"
+            value={filters.powerLevel}
+            onChange={(event) => setFilters((current) => ({ ...current, powerLevel: event.target.value as "ALL" | PowerLevel }))}
+          >
+            <option value="ALL">Todos os niveis</option>
+            {POWER_LEVEL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <Input type="number" placeholder="Ataque minimo" value={filters.minAttack} onChange={(event) => setFilters((current) => ({ ...current, minAttack: event.target.value }))} />
+          <Input type="number" placeholder="Defesa minima" value={filters.minDefense} onChange={(event) => setFilters((current) => ({ ...current, minDefense: event.target.value }))} />
         </CardContent>
       </Card>
+      <Dialog
+        open={Boolean(selectedAnima)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedAnimaId(null);
+            setSelectedTab("details");
+            editForm.reset(defaultFormValues);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-6xl">
+          {selectedAnima ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{selectedAnima.name}</DialogTitle>
+                <DialogDescription>Dados de combate, evolucao e configuracao visual.</DialogDescription>
+              </DialogHeader>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Animas cadastrados</CardTitle>
-          <CardDescription>Total filtrado: {filteredAnimas.length}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {errorMessage ? <p className="mb-4 text-sm text-red-400">{errorMessage}</p> : null}
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 rounded-md border bg-muted/20 p-1">
+                  <button
+                    type="button"
+                    className={`rounded-sm px-3 py-2 text-sm transition ${selectedTab === "details" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => setSelectedTab("details")}
+                  >
+                    Detalhes
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-sm px-3 py-2 text-sm transition ${selectedTab === "edit" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => setSelectedTab("edit")}
+                  >
+                    Edicao
+                  </button>
+                </div>
 
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Imagem</TableHead>
-                <TableHead>Nome</TableHead>
-                <TableHead>Nível</TableHead>
-                <TableHead>Ataque</TableHead>
-                <TableHead>Vel. Ataque (s)</TableHead>
-                <TableHead>% Crítico</TableHead>
-                <TableHead>Agilidade</TableHead>
-                <TableHead>Defesa</TableHead>
-                <TableHead>Vida Máx.</TableHead>
-                <TableHead>Escala</TableHead>
-                <TableHead>Próx. Evolução</TableHead>
-                <TableHead className="text-right">Ações</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {!loading && filteredAnimas.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={12} className="text-center text-muted-foreground">
-                    Nenhum Anima encontrado com os filtros selecionados.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-
-              {filteredAnimas.map((anima) => (
-                <TableRow key={anima.id}>
-                  <TableCell>
-                    {anima.imageData ? (
-                      <img src={anima.imageData} alt={anima.name} className="h-12 w-12 rounded-md border border-border object-cover" />
-                    ) : (
-                      <div className="h-12 w-12 rounded-md border border-border bg-muted" />
-                    )}
-                  </TableCell>
-                  <TableCell className="font-medium">{anima.name}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{powerLabel(anima.powerLevel)}</Badge>
-                  </TableCell>
-                  <TableCell>{anima.attack}</TableCell>
-                  <TableCell>{anima.attackSpeedSeconds.toFixed(2)}</TableCell>
-                  <TableCell>{anima.critChance.toFixed(1)}%</TableCell>
-                  <TableCell>{anima.agility}</TableCell>
-                  <TableCell>{anima.defense}</TableCell>
-                  <TableCell>{anima.maxHp}</TableCell>
-                  <TableCell>{(anima.spriteScale ?? 3).toFixed(1)}x</TableCell>
-                  <TableCell>
-                    {anima.nextEvolution ? (
-                      <div className="flex items-center gap-2">
-                        {anima.nextEvolution.imageData ? (
-                          <img src={anima.nextEvolution.imageData} alt={anima.nextEvolution.name} className="h-8 w-8 rounded border border-border object-cover" />
+                {selectedTab === "details" ? (
+                  <div className="space-y-5">
+                    <div className="grid gap-4 md:grid-cols-[200px_1fr]">
+                      <div className="rounded-xl border bg-muted/20 p-3">
+                        {selectedAnima.imageData ? (
+                          <img
+                            src={selectedAnima.imageData}
+                            alt={selectedAnima.name}
+                            className="mx-auto h-40 w-full object-contain"
+                            style={{ transform: selectedAnima.flipHorizontal ? "scaleX(-1)" : "scaleX(1)", imageRendering: "pixelated" }}
+                          />
                         ) : (
-                          <div className="h-8 w-8 rounded border border-border bg-muted" />
+                          <div className="h-40 rounded-md border bg-muted" />
                         )}
-                        <span>{anima.nextEvolution.name}</span>
                       </div>
-                    ) : (
-                      <span className="text-muted-foreground">-</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm">
-                          Ações
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary">{powerLabel(selectedAnima.powerLevel)}</Badge>
+                          <Badge variant="outline">Sprite {selectedAnima.spriteScale.toFixed(1)}x</Badge>
+                          <Badge variant="outline">{selectedAnima.flipHorizontal ? "Invertido" : "Normal"}</Badge>
+                          <Badge variant="outline">{selectedAnima.nextEvolution ? `Evolve -> ${selectedAnima.nextEvolution.name}` : "Sem evolucao"}</Badge>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="rounded-md border bg-muted/20 p-2 text-sm">
+                            <div className="mb-1 inline-flex items-center gap-1 text-muted-foreground">
+                              <Swords className="h-3.5 w-3.5" />
+                              ATK
+                            </div>
+                            <p className="font-semibold">{selectedAnima.attack}</p>
+                          </div>
+                          <div className="rounded-md border bg-muted/20 p-2 text-sm">
+                            <div className="mb-1 inline-flex items-center gap-1 text-muted-foreground">
+                              <Shield className="h-3.5 w-3.5" />
+                              DEF
+                            </div>
+                            <p className="font-semibold">{selectedAnima.defense}</p>
+                          </div>
+                          <div className="rounded-md border bg-muted/20 p-2 text-sm">
+                            <div className="mb-1 inline-flex items-center gap-1 text-muted-foreground">
+                              <Heart className="h-3.5 w-3.5" />
+                              HP Max
+                            </div>
+                            <p className="font-semibold">{selectedAnima.maxHp}</p>
+                          </div>
+                          <div className="rounded-md border bg-muted/20 p-2 text-sm">
+                            <div className="mb-1 inline-flex items-center gap-1 text-muted-foreground">
+                              <Timer className="h-3.5 w-3.5" />
+                              Atk Speed
+                            </div>
+                            <p className="font-semibold">{selectedAnima.attackSpeedSeconds.toFixed(2)}s</p>
+                          </div>
+                          <div className="rounded-md border bg-muted/20 p-2 text-sm">
+                            <div className="mb-1 inline-flex items-center gap-1 text-muted-foreground">
+                              <Sparkles className="h-3.5 w-3.5" />
+                              Critico
+                            </div>
+                            <p className="font-semibold">{selectedAnima.critChance.toFixed(1)}%</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <DialogFooter className="gap-2">
+                      <Button variant="outline" onClick={() => setSelectedTab("edit")}>
+                        <Pencil className="mr-1 h-4 w-4" />
+                        Editar
+                      </Button>
+                      <Button variant="destructive" onClick={() => void handleDelete(selectedAnima)} disabled={deletingId === selectedAnima.id}>
+                        <Trash2 className="mr-1 h-4 w-4" />
+                        {deletingId === selectedAnima.id ? "Excluindo..." : "Excluir"}
+                      </Button>
+                    </DialogFooter>
+                  </div>
+                ) : (
+                  <Form {...editForm}>
+                    <form className="space-y-4" onSubmit={editForm.handleSubmit(handleUpdate)}>
+                      <AnimaFormFields form={editForm} animas={animas} excludeEvolutionId={selectedAnima.id} />
+                      <DialogFooter className="gap-2">
+                        <Button type="button" variant="outline" onClick={() => setSelectedTab("details")}>
+                          Voltar para detalhes
                         </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => openEdit(anima)}>
-                          <Pencil className="mr-2 h-4 w-4" />
-                          Editar
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-red-400 focus:text-red-300" onClick={() => void handleDelete(anima.id)}>
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Excluir
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                        <Button type="button" variant="destructive" onClick={() => void handleDelete(selectedAnima)} disabled={deletingId === selectedAnima.id}>
+                          {deletingId === selectedAnima.id ? "Excluindo..." : "Excluir"}
+                        </Button>
+                        <Button type="submit" disabled={editForm.formState.isSubmitting}>
+                          {editForm.formState.isSubmitting ? "Salvando..." : "Salvar alteracoes"}
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </Form>
+                )}
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6">
+        {!loading && filteredAnimas.length === 0 ? (
+          <Card className="col-span-full">
+            <CardContent className="py-10 text-center text-sm text-muted-foreground">Nenhum anima encontrado com os filtros atuais.</CardContent>
+          </Card>
+        ) : null}
+
+        {filteredAnimas.map((anima) => (
+          <Card key={anima.id} className="group border-border/70 bg-card/70 transition hover:border-primary/60 hover:shadow-md">
+            <button type="button" className="w-full text-left" onClick={() => openAnimaModal(anima, "details")}>
+              <div className="flex items-center gap-3 p-3">
+                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border bg-muted/30">
+                  {anima.imageData ? (
+                    <img
+                      src={anima.imageData}
+                      alt={anima.name}
+                      className="h-14 w-14 object-contain transition duration-200 group-hover:scale-105"
+                      style={{ transform: anima.flipHorizontal ? "scaleX(-1)" : "scaleX(1)", imageRendering: "pixelated" }}
+                    />
+                  ) : (
+                    <div className="h-12 w-12 rounded border bg-muted" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm font-semibold">{anima.name}</p>
+                    <Badge variant="secondary" className="text-[10px]">
+                      {powerLabel(anima.powerLevel)}
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">ATK {anima.attack} . DEF {anima.defense} . HP {anima.maxHp}</p>
+                  <div className="flex flex-wrap gap-1">
+                    <Badge variant="outline" className="text-[10px]">
+                      {anima.nextEvolution ? `Evo: ${anima.nextEvolution.name}` : "Sem evo"}
+                    </Badge>
+                    <Badge variant="outline" className="text-[10px]">
+                      {anima.flipHorizontal ? "Invertido" : "Normal"}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+            </button>
+            <CardContent className="flex items-center justify-end gap-2 px-3 pb-3 pt-0">
+              <Button variant="outline" size="sm" onClick={() => openAnimaModal(anima, "edit")}>
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => void handleDelete(anima)} disabled={deletingId === anima.id}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </section>
   );
 };

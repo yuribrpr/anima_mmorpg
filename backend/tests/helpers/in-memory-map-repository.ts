@@ -172,4 +172,37 @@ export class InMemoryMapRepository implements MapRepository {
     this.states.set(`${userId}:${mapId}`, state);
     return state;
   }
+
+  async listPlayerPresenceByMap(mapId: string, excludeUserId: string, updatedAfter: Date) {
+    const list: Array<
+      PlayerMapStateEntity & {
+        user: {
+          username: string;
+          adoptedAnimas: Array<{
+            nickname: string;
+            level: number;
+            baseAnima: {
+              name: string;
+              imageData: string | null;
+              flipHorizontal: boolean;
+              spriteScale: number;
+            };
+          }>;
+        };
+      }
+    > = [];
+    for (const state of this.states.values()) {
+      if (state.mapId !== mapId || state.userId === excludeUserId || state.updatedAt < updatedAfter) {
+        continue;
+      }
+      list.push({
+        ...state,
+        user: {
+          username: `player_${state.userId.slice(0, 6)}`,
+          adoptedAnimas: [],
+        },
+      });
+    }
+    return list;
+  }
 }

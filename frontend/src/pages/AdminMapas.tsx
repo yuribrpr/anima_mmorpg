@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Brush, Eraser, Hand, MapPinned, Minus, Plus, Target, Upload, ZoomIn } from "lucide-react";
+import { Brush, Eraser, Hand, MapPinned, Minus, Pencil, Plus, Target, Trash2, Upload, ZoomIn } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { listBestiaryAnimas } from "@/lib/bestiario";
-import { activateMap, createMap, getMapById, listMaps, saveMapAssets, saveMapLayout } from "@/lib/mapas";
+import { activateMap, createMap, deleteMap, getMapById, listMaps, renameMap, saveMapAssets, saveMapLayout } from "@/lib/mapas";
 import { GRID_COLS, GRID_ROWS, RENDER_BASE_HEIGHT, TILE_SIZE, WORLD_HEIGHT, WORLD_WIDTH } from "@/lib/map-grid";
 import type { GameMap } from "@/types/mapa";
 import type { BestiaryAnima } from "@/types/bestiary-anima";
@@ -76,6 +76,9 @@ export const AdminMapasPage = () => {
   const [enemyAreaMode, setEnemyAreaMode] = useState<EnemyAreaMode>("spawn");
   const [selectedPortalId, setSelectedPortalId] = useState<string | null>(null);
   const [newPortalTargetMapId, setNewPortalTargetMapId] = useState<string>("");
+  const [renameMapName, setRenameMapName] = useState("");
+  const [renamingMap, setRenamingMap] = useState(false);
+  const [deletingMap, setDeletingMap] = useState(false);
 
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -112,10 +115,18 @@ export const AdminMapasPage = () => {
     const detailedRaw = await Promise.all(items.map((item) => getMapById(item.id)));
     const detailed = detailedRaw.map(normalizeMap);
     setMaps(detailed);
-    if (!selectedMapId && detailed.length > 0) {
-      setSelectedMapId(detailed.find((item) => item.isActive)?.id ?? detailed[0].id);
-    }
-  }, [selectedMapId]);
+    setSelectedMapId((current) => {
+      if (detailed.length === 0) {
+        return null;
+      }
+
+      if (current && detailed.some((item) => item.id === current)) {
+        return current;
+      }
+
+      return detailed.find((item) => item.isActive)?.id ?? detailed[0].id;
+    });
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -216,6 +227,10 @@ export const AdminMapasPage = () => {
   }, [mapDraft]);
 
   useEffect(() => {
+    setRenameMapName(mapDraft?.name ?? "");
+  }, [mapDraft?.id, mapDraft?.name]);
+
+  useEffect(() => {
     if (!mapDraft || bestiaryAnimas.length === 0 || mapDraft.enemySpawns.length === 0) {
       return;
     }
@@ -233,7 +248,7 @@ export const AdminMapasPage = () => {
         bestiaryName: source.name ?? group.bestiaryName ?? null,
         imageData: source.imageData ?? group.imageData ?? null,
         spriteScale: source.spriteScale > 0 ? source.spriteScale : group.spriteScale > 0 ? group.spriteScale : 3,
-        flipHorizontal: source.flipHorizontal ?? group.flipHorizontal ?? true,
+        flipHorizontal: source.flipHorizontal ?? group.flipHorizontal ?? false,
         movementSpeed: group.movementSpeed > 0 ? group.movementSpeed : 2.2,
       };
 
@@ -501,7 +516,7 @@ export const AdminMapasPage = () => {
       bestiaryName: bestiary.name,
       imageData: bestiary.imageData,
       spriteScale: bestiary.spriteScale ?? 3,
-      flipHorizontal: bestiary.flipHorizontal ?? true,
+      flipHorizontal: bestiary.flipHorizontal ?? false,
       spawnCount: 3,
       respawnSeconds: 15,
       movementSpeed: 2.2,
@@ -1012,6 +1027,74 @@ export const AdminMapasPage = () => {
     }
   };
 
+  const handleRenameMap = async () => {
+    if (!mapDraft) {
+      return;
+    }
+
+    const nextName = renameMapName.trim();
+    if (nextName.length < 2) {
+      setErrorMessage("Informe um nome com ao menos 2 caracteres.");
+      return;
+    }
+
+    if (nextName === mapDraft.name) {
+      return;
+    }
+
+    setRenamingMap(true);
+    try {
+      const updated = await renameMap(mapDraft.id, nextName);
+      setMapDraft(normalizeMap(updated));
+      await refreshMaps();
+      setErrorMessage(null);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("Falha ao renomear mapa.");
+      }
+    } finally {
+      setRenamingMap(false);
+    }
+  };
+
+  const handleDeleteMap = async () => {
+    if (!mapDraft) {
+      return;
+    }
+
+    if (maps.length <= 1) {
+      setErrorMessage("Nao e permitido excluir o ultimo mapa.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Excluir o mapa \"${mapDraft.name}\"? Esta acao nao pode ser desfeita.`);
+    if (!confirmed) {
+      return;
+    }
+
+    const deletingMapId = mapDraft.id;
+    const fallbackId = maps.find((item) => item.id !== deletingMapId)?.id ?? null;
+
+    setDeletingMap(true);
+    try {
+      await deleteMap(deletingMapId);
+      setMapDraft((current) => (current?.id === deletingMapId ? null : current));
+      setSelectedMapId((current) => (current === deletingMapId ? fallbackId : current));
+      await refreshMaps();
+      setErrorMessage(null);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("Falha ao excluir mapa.");
+      }
+    } finally {
+      setDeletingMap(false);
+    }
+  };
+
   const handleBackgroundUpload = async (file: File | null) => {
     if (!file || !mapDraft) return;
 
@@ -1073,6 +1156,35 @@ export const AdminMapasPage = () => {
             </Button>
             <p className="text-xs text-muted-foreground">Mapa selecionado: {activeMapName}</p>
           </div>
+
+          <div className="grid gap-3 md:grid-cols-[1fr_190px_190px]">
+            <Input
+              placeholder="Renomear mapa selecionado"
+              value={renameMapName}
+              onChange={(event) => setRenameMapName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void handleRenameMap();
+                }
+              }}
+              disabled={!mapDraft || deletingMap}
+            />
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => void handleRenameMap()}
+              disabled={!mapDraft || deletingMap || renamingMap || renameMapName.trim().length < 2 || renameMapName.trim() === mapDraft.name}
+            >
+              <Pencil className="h-4 w-4" />
+              {renamingMap ? "Renomeando..." : "Renomear mapa"}
+            </Button>
+            <Button variant="destructive" className="gap-2" onClick={() => void handleDeleteMap()} disabled={!mapDraft || deletingMap || maps.length <= 1}>
+              <Trash2 className="h-4 w-4" />
+              {deletingMap ? "Excluindo..." : "Excluir mapa"}
+            </Button>
+          </div>
+
+          {maps.length <= 1 ? <p className="text-xs text-muted-foreground">Pelo menos 1 mapa precisa existir no sistema.</p> : null}
         </CardContent>
       </Card>
 

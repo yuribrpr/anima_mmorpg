@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import { useMemo } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { ChevronRight, Compass, FolderCog, LogOut, Shield, Sparkles, Swords } from "lucide-react";
+import { ChevronRight, Compass, FolderCog, LogOut, Shield, Sparkles, Swords, Package } from "lucide-react";
 import type { UserRole } from "@/types/auth";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -104,6 +104,19 @@ const SidebarPanel = ({ username, userRole, onLogout, className }: SidebarProps 
                 )}
               >
                 <NavLink to="/app/admin/bestiario">Bestiario</NavLink>
+              </Button>
+              <Button
+                asChild
+                variant="ghost"
+                className={cn(
+                  "w-full justify-start text-muted-foreground",
+                  location.pathname === "/app/admin/itens" ? "bg-muted text-foreground" : undefined,
+                )}
+              >
+                <NavLink to="/app/admin/itens" className="inline-flex items-center gap-2">
+                  <Package className="h-3.5 w-3.5" />
+                  Itens
+                </NavLink>
               </Button>
             </CollapsibleContent>
           </Collapsible>

@@ -5,6 +5,7 @@ import {
   mapIdParamsSchema,
   usePortalSchema,
   updateActiveMapStateSchema,
+  updateMapSchema,
   updateMapAssetsSchema,
   updateMapLayoutSchema,
 } from "./map.schemas";
@@ -40,6 +41,32 @@ export class MapController {
     }
   };
 
+  listActivePlayers = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const players = await this.mapService.listActivePlayers(request.authUserId);
+      response.status(200).json({ players });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  listActiveEnemies = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const enemies = await this.mapService.listActiveEnemies(request.authUserId);
+      response.status(200).json({ enemies });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   usePortal = async (request: Request, response: Response, next: NextFunction) => {
     try {
       if (!request.authUserId) {
@@ -68,6 +95,17 @@ export class MapController {
       const input = createMapSchema.parse(request.body);
       const map = await this.mapService.create(input);
       response.status(201).json({ map });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  update = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const params = mapIdParamsSchema.parse(request.params);
+      const input = updateMapSchema.parse(request.body);
+      const map = await this.mapService.update(params.id, input);
+      response.status(200).json({ map });
     } catch (error) {
       next(error);
     }
@@ -110,6 +148,16 @@ export class MapController {
       const params = mapIdParamsSchema.parse(request.params);
       const map = await this.mapService.activate(params.id);
       response.status(200).json({ map });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  delete = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const params = mapIdParamsSchema.parse(request.params);
+      await this.mapService.delete(params.id);
+      response.status(204).send();
     } catch (error) {
       next(error);
     }

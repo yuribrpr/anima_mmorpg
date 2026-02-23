@@ -72,6 +72,25 @@ export type PlayerMapState = {
   updatedAt: string;
 };
 
+export type PlayerPresence = PlayerMapState & {
+  username: string;
+  animaName: string | null;
+  animaLevel: number | null;
+  animaImageData: string | null;
+  animaFlipHorizontal: boolean | null;
+  animaSpriteScale: number | null;
+};
+
+export type EnemyPresence = {
+  id: string;
+  groupId: string;
+  tileX: number;
+  tileY: number;
+  facingX: -1 | 1;
+  spawned: boolean;
+  updatedAt: string;
+};
+
 export type ActiveMapPayload = {
   map: GameMap;
   state: PlayerMapState;

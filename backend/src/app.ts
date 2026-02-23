@@ -12,6 +12,10 @@ import { createBestiaryAnimaRouter } from "./modules/bestiary/bestiary.routes";
 import { BestiaryAnimaRepository, PrismaBestiaryAnimaRepository } from "./modules/bestiary/bestiary.repository";
 import { createAuthRouter } from "./modules/auth/auth.routes";
 import { PrismaUserRepository, UserRepository } from "./modules/auth/auth.repository";
+import { createInventoryRouter } from "./modules/inventory/inventory.routes";
+import { InventoryRepository, PrismaInventoryRepository } from "./modules/inventory/inventory.repository";
+import { createItemRouter } from "./modules/items/item.routes";
+import { ItemRepository, PrismaItemRepository } from "./modules/items/item.repository";
 import { createMapRouter } from "./modules/maps/map.routes";
 import { MapRepository, PrismaMapRepository } from "./modules/maps/map.repository";
 
@@ -21,6 +25,8 @@ type AppDependencies = {
   bestiaryAnimaRepository?: BestiaryAnimaRepository;
   adoptionRepository?: AdoptionRepository;
   mapRepository?: MapRepository;
+  inventoryRepository?: InventoryRepository;
+  itemRepository?: ItemRepository;
 };
 
 export const createApp = (dependencies: AppDependencies = {}) => {
@@ -45,12 +51,16 @@ export const createApp = (dependencies: AppDependencies = {}) => {
   const bestiaryAnimaRepository = dependencies.bestiaryAnimaRepository ?? new PrismaBestiaryAnimaRepository();
   const adoptionRepository = dependencies.adoptionRepository ?? new PrismaAdoptionRepository();
   const mapRepository = dependencies.mapRepository ?? new PrismaMapRepository();
+  const inventoryRepository = dependencies.inventoryRepository ?? new PrismaInventoryRepository();
+  const itemRepository = dependencies.itemRepository ?? new PrismaItemRepository();
 
   app.use("/auth", createAuthRouter(userRepository));
   app.use("/animas", createAnimaRouter(animaRepository));
   app.use("/bestiario", createBestiaryAnimaRouter(bestiaryAnimaRepository));
   app.use("/adocoes", createAdoptionRouter(adoptionRepository, animaRepository));
   app.use("/mapas", createMapRouter(mapRepository));
+  app.use("/inventario", createInventoryRouter(inventoryRepository));
+  app.use("/itens", createItemRouter(itemRepository));
 
   app.use(notFoundMiddleware);
   app.use(errorMiddleware);

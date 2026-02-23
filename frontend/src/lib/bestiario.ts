@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/api";
+import { ApiError, apiRequest } from "@/lib/api";
 import type { BestiaryAnima, CreateBestiaryAnimaInput, UpdateBestiaryAnimaInput } from "@/types/bestiary-anima";
 
 export const listBestiaryAnimas = async () => {
@@ -25,4 +25,26 @@ export const updateBestiaryAnima = async (id: string, input: UpdateBestiaryAnima
   });
 
   return response.anima;
+};
+
+export const deleteBestiaryAnima = async (id: string) => {
+  const normalizedId = String(id ?? "").trim();
+  if (!normalizedId) {
+    throw new ApiError(400, "BESTIARY_ANIMA_ID_REQUIRED", "Bestiary anima id is required");
+  }
+
+  const encodedId = encodeURIComponent(normalizedId);
+  try {
+    await apiRequest<void>(`/bestiario/${encodedId}`, {
+      method: "DELETE",
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404 && error.code === "NOT_FOUND") {
+      await apiRequest<void>(`/bestiario?id=${encodedId}`, {
+        method: "DELETE",
+      });
+      return;
+    }
+    throw error;
+  }
 };

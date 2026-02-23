@@ -1,5 +1,11 @@
 import { PowerLevel } from "./anima";
 
+export type BestiaryDropInput = {
+  itemId: string;
+  quantity: number;
+  dropChance: number;
+};
+
 export type CreateBestiaryAnimaInput = {
   name: string;
   attack: number;
@@ -12,6 +18,7 @@ export type CreateBestiaryAnimaInput = {
   spriteScale?: number;
   flipHorizontal?: boolean;
   powerLevel: PowerLevel;
+  drops?: BestiaryDropInput[];
 };
 
 export type UpdateBestiaryAnimaInput = CreateBestiaryAnimaInput;

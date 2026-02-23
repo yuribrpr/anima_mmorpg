@@ -12,6 +12,20 @@ type MapEntity = Omit<GameMap, "tilePalette" | "tileLayer" | "collisionLayer" | 
 };
 
 type PlayerMapStateEntity = PlayerMapState;
+type PlayerPresenceEntity = PlayerMapState & {
+  user: {
+    username: string;
+    adoptedAnimas: Array<{
+      nickname: string;
+      level: number;
+      baseAnima: {
+        name: string;
+        flipHorizontal: boolean;
+        spriteScale: number;
+      };
+    }>;
+  };
+};
 
 const createEmptyTileLayer = () => Array.from({ length: MAP_ROWS }, () => Array.from({ length: MAP_COLS }, () => null as number | null));
 const createEmptyCollisionLayer = () => Array.from({ length: MAP_ROWS }, () => Array.from({ length: MAP_COLS }, () => false));
@@ -179,7 +193,7 @@ const sanitizeEnemySpawnsForStorage = (enemySpawns: MapEnemySpawnConfig[]) =>
     id: spawn.id,
     bestiaryAnimaId: spawn.bestiaryAnimaId,
     bestiaryName: spawn.bestiaryName ?? null,
-    imageData: null,
+    imageData: typeof spawn.imageData === "string" ? spawn.imageData : null,
     spriteScale: spawn.spriteScale,
     flipHorizontal: spawn.flipHorizontal,
     spawnCount: spawn.spawnCount,
@@ -233,13 +247,18 @@ export interface MapRepository {
   list(): Promise<MapEntity[]>;
   create(name: string): Promise<MapEntity>;
   findById(id: string): Promise<MapEntity | null>;
+  updateName(id: string, name: string): Promise<MapEntity>;
+  syncPortalTargetName(targetMapId: string, targetMapName: string): Promise<void>;
   updateLayout(id: string, input: UpdateMapLayoutInput): Promise<MapEntity>;
   updateAssets(id: string, input: UpdateMapAssetsInput): Promise<MapEntity>;
   setActive(id: string): Promise<MapEntity>;
+  removePortalsReferencingMapId(targetMapId: string): Promise<void>;
+  delete(id: string): Promise<void>;
   findPlayerState(userId: string, mapId: string): Promise<PlayerMapStateEntity | null>;
   findLatestPlayerState(userId: string): Promise<PlayerMapStateEntity | null>;
   upsertPlayerState(userId: string, mapId: string, input: UpdateActiveMapStateInput): Promise<PlayerMapStateEntity>;
   createPlayerState(userId: string, mapId: string, tileX: number, tileY: number): Promise<PlayerMapStateEntity>;
+  listPlayerPresenceByMap(mapId: string, excludeUserId: string, updatedAfter: Date): Promise<PlayerPresenceEntity[]>;
 }
 
 export class PrismaMapRepository implements MapRepository {
@@ -279,6 +298,55 @@ export class PrismaMapRepository implements MapRepository {
   async findById(id: string) {
     const map = await prisma.gameMap.findUnique({ where: { id } });
     return map ? toEntity(map) : null;
+  }
+
+  async updateName(id: string, name: string) {
+    const map = await prisma.gameMap.update({
+      where: { id },
+      data: { name },
+    });
+
+    return toEntity(map);
+  }
+
+  async syncPortalTargetName(targetMapId: string, targetMapName: string) {
+    const maps = await prisma.gameMap.findMany({
+      where: { NOT: { id: targetMapId } },
+      select: {
+        id: true,
+        portals: true,
+      },
+    });
+
+    const updates = maps.flatMap((map) => {
+      const currentPortals = normalizePortals(map.portals);
+      let changed = false;
+      const nextPortals = currentPortals.map((portal) => {
+        if (portal.targetMapId !== targetMapId || portal.targetMapName === targetMapName) {
+          return portal;
+        }
+        changed = true;
+        return {
+          ...portal,
+          targetMapName,
+        };
+      });
+
+      if (!changed) {
+        return [];
+      }
+
+      return prisma.gameMap.update({
+        where: { id: map.id },
+        data: {
+          portals: sanitizePortalsForStorage(nextPortals),
+        },
+      });
+    });
+
+    if (updates.length > 0) {
+      await prisma.$transaction(updates);
+    }
   }
 
   async updateLayout(id: string, input: UpdateMapLayoutInput) {
@@ -323,6 +391,41 @@ export class PrismaMapRepository implements MapRepository {
     ]);
 
     return toEntity(map);
+  }
+
+  async removePortalsReferencingMapId(targetMapId: string) {
+    const maps = await prisma.gameMap.findMany({
+      where: { NOT: { id: targetMapId } },
+      select: {
+        id: true,
+        portals: true,
+      },
+    });
+
+    const updates = maps.flatMap((map) => {
+      const currentPortals = normalizePortals(map.portals);
+      const nextPortals = currentPortals.filter((portal) => portal.targetMapId !== targetMapId);
+      if (nextPortals.length === currentPortals.length) {
+        return [];
+      }
+
+      return prisma.gameMap.update({
+        where: { id: map.id },
+        data: {
+          portals: sanitizePortalsForStorage(nextPortals),
+        },
+      });
+    });
+
+    if (updates.length > 0) {
+      await prisma.$transaction(updates);
+    }
+  }
+
+  async delete(id: string) {
+    await prisma.gameMap.delete({
+      where: { id },
+    });
   }
 
   async findPlayerState(userId: string, mapId: string) {
@@ -380,7 +483,49 @@ export class PrismaMapRepository implements MapRepository {
       },
     });
   }
+
+  async listPlayerPresenceByMap(mapId: string, excludeUserId: string, updatedAfter: Date) {
+    return prisma.playerMapState.findMany({
+      where: {
+        mapId,
+        userId: {
+          not: excludeUserId,
+        },
+        updatedAt: {
+          gte: updatedAfter,
+        },
+      },
+      include: {
+        user: {
+          select: {
+            username: true,
+            adoptedAnimas: {
+              where: {
+                isPrimary: true,
+              },
+              select: {
+                nickname: true,
+                level: true,
+                baseAnima: {
+                  select: {
+                    name: true,
+                    flipHorizontal: true,
+                    spriteScale: true,
+                  },
+                },
+              },
+              take: 1,
+            },
+          },
+        },
+      },
+      orderBy: {
+        updatedAt: "desc",
+      },
+      take: 200,
+    });
+  }
 }
 
 export { createEmptyCollisionLayer, createEmptyTileLayer };
-export type { MapEntity, PlayerMapStateEntity };
+export type { MapEntity, PlayerMapStateEntity, PlayerPresenceEntity };

@@ -84,7 +84,7 @@ describe("auth routing", () => {
     window.history.pushState({}, "", "/login");
     render(<App />);
 
-    expect(await screen.findByText(/Exploracao em grid/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Mapa Inicial/i)).toBeInTheDocument();
   });
 
   it("shows validation errors on login form", async () => {
@@ -161,6 +161,6 @@ describe("auth routing", () => {
     window.history.pushState({}, "", "/app/admin/mapas");
     render(<App />);
 
-    expect(await screen.findByText(/Exploracao em grid/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Mapa Inicial/i)).toBeInTheDocument();
   });
 });

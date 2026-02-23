@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const powerLevelSchema = z.enum(["ROOKIE", "CHAMPION", "ULTIMATE", "MEGA", "BURST_MODE"]);
+const dropSchema = z.object({
+  itemId: z.string().trim().min(1),
+  quantity: z.number().int().min(1).max(9999),
+  dropChance: z.number().min(0).max(100),
+});
 
 export const createBestiaryAnimaSchema = z.object({
   name: z.string().trim().min(2).max(80),
@@ -14,6 +19,7 @@ export const createBestiaryAnimaSchema = z.object({
   spriteScale: z.number().positive().default(3),
   flipHorizontal: z.boolean().default(true),
   powerLevel: powerLevelSchema,
+  drops: z.array(dropSchema).max(30).optional().default([]),
 });
 
 export const updateBestiaryAnimaSchema = createBestiaryAnimaSchema;

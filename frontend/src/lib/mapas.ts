@@ -1,5 +1,5 @@
 import { apiRequest } from "@/lib/api";
-import type { ActiveMapPayload, GameMap, GameMapListItem, MapAssetsPayload, MapLayoutPayload, PlayerMapState } from "@/types/mapa";
+import type { ActiveMapPayload, EnemyPresence, GameMap, GameMapListItem, MapAssetsPayload, MapLayoutPayload, PlayerMapState, PlayerPresence } from "@/types/mapa";
 
 export const getActiveMap = async () => {
   return apiRequest<ActiveMapPayload>("/mapas/ativo", {
@@ -23,6 +23,22 @@ export const usePortal = async (portalId: string) => {
   });
 };
 
+export const listActivePlayers = async () => {
+  const response = await apiRequest<{ players: PlayerPresence[] }>("/mapas/ativo/jogadores", {
+    method: "GET",
+  });
+
+  return response.players;
+};
+
+export const listActiveEnemies = async () => {
+  const response = await apiRequest<{ enemies: EnemyPresence[] }>("/mapas/ativo/inimigos", {
+    method: "GET",
+  });
+
+  return response.enemies;
+};
+
 export const listMaps = async () => {
   const response = await apiRequest<{ maps: GameMapListItem[] }>("/mapas", {
     method: "GET",
@@ -38,6 +54,21 @@ export const createMap = async (name: string) => {
   });
 
   return response.map;
+};
+
+export const renameMap = async (id: string, name: string) => {
+  const response = await apiRequest<{ map: GameMap }>(`/mapas/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+
+  return response.map;
+};
+
+export const deleteMap = async (id: string) => {
+  await apiRequest<void>(`/mapas/${id}`, {
+    method: "DELETE",
+  });
 };
 
 export const getMapById = async (id: string) => {
