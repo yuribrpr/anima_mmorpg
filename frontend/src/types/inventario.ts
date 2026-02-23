@@ -27,6 +27,7 @@ export type UserInventory = {
   totalSlots: number;
   lockedSlotStart: number;
   layout: InventoryItemLayout[];
+  hotbar: Array<string | null>;
   items: InventoryItem[];
   updatedAt: string;
 };

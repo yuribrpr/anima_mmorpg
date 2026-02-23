@@ -27,12 +27,17 @@ export type UserInventoryOutput = {
   totalSlots: number;
   lockedSlotStart: number;
   layout: InventoryItemLayout[];
+  hotbar: Array<string | null>;
   items: InventoryItemOutput[];
   updatedAt: Date;
 };
 
 export type UpdateInventoryLayoutInput = {
   layout: InventoryItemLayout[];
+};
+
+export type UpdateInventoryHotbarInput = {
+  hotbar: Array<string | null>;
 };
 
 export type CollectInventoryDropInput = {

@@ -12,6 +12,7 @@ export const createInventoryRouter = (inventoryRepository: InventoryRepository) 
   router.use(authMiddleware);
   router.get("/", controller.getByUser);
   router.patch("/layout", controller.updateLayout);
+  router.patch("/hotbar", controller.updateHotbar);
   router.post("/coletar-drop", controller.collectDrop);
   router.post("/usar", controller.useItem);
 

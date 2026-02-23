@@ -20,7 +20,10 @@ export type AnimaOutput = {
   flipHorizontal: boolean;
   powerLevel: PowerLevel;
   nextEvolutionId: string | null;
+  nextEvolutionLevelRequired: number;
   nextEvolution: AnimaReference | null;
+  previousEvolutionId: string | null;
+  previousEvolution: AnimaReference | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -38,6 +41,8 @@ export type CreateAnimaInput = {
   flipHorizontal?: boolean;
   powerLevel: PowerLevel;
   nextEvolutionId?: string | null;
+  previousEvolutionId?: string | null;
+  nextEvolutionLevelRequired?: number;
 };
 
 export type UpdateAnimaInput = CreateAnimaInput;

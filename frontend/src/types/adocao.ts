@@ -13,6 +13,17 @@ export type AdoptionCandidate = {
   agility: number;
   defense: number;
   maxHp: number;
+  nextEvolutionLevelRequired: number;
+  nextEvolution: {
+    id: string;
+    name: string;
+    imageData: string | null;
+  } | null;
+  previousEvolution: {
+    id: string;
+    name: string;
+    imageData: string | null;
+  } | null;
 };
 
 export type AdoptAnimaInput = {
@@ -33,6 +44,7 @@ export type AdoptedAnima = {
   bonusMaxHp: number;
   attackSpeedReduction: number;
   critChanceBonus: number;
+  isNextEvolutionUnlocked: boolean;
   totalAttack: number;
   totalDefense: number;
   totalMaxHp: number;
@@ -41,4 +53,18 @@ export type AdoptedAnima = {
   baseAnima: AdoptionCandidate;
   createdAt: string;
   updatedAt: string;
+};
+
+export type EvolutionChainNode = {
+  id: string;
+  name: string;
+  imageData: string | null;
+  levelRequiredFromPrevious: number | null;
+};
+
+export type AdoptionEvolutionChain = {
+  adoptedAnimaId: string;
+  currentBaseAnimaId: string;
+  currentIndex: number;
+  chain: EvolutionChainNode[];
 };

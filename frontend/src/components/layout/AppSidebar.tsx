@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import { useMemo } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { ChevronRight, Compass, FolderCog, LogOut, Shield, Sparkles, Swords, Package, Users } from "lucide-react";
+import { ChevronRight, Compass, FolderCog, LogOut, Shield, Sparkles, Swords, Package, Users, SlidersHorizontal } from "lucide-react";
 import type { UserRole } from "@/types/auth";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -129,6 +129,19 @@ const SidebarPanel = ({ username, userRole, onLogout, className }: SidebarProps 
                 <NavLink to="/app/admin/npcs" className="inline-flex items-center gap-2">
                   <Users className="h-3.5 w-3.5" />
                   NPCs
+                </NavLink>
+              </Button>
+              <Button
+                asChild
+                variant="ghost"
+                className={cn(
+                  "w-full justify-start text-muted-foreground",
+                  location.pathname === "/app/admin/variaveis-globais" ? "bg-muted text-foreground" : undefined,
+                )}
+              >
+                <NavLink to="/app/admin/variaveis-globais" className="inline-flex items-center gap-2">
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  Variaveis Globais
                 </NavLink>
               </Button>
             </CollapsibleContent>

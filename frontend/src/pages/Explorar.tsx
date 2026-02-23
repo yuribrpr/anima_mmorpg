@@ -5,13 +5,17 @@ import { ApiError } from "@/lib/api";
 import { listAdoptedAnimas } from "@/lib/adocoes";
 import { listBestiaryAnimas } from "@/lib/bestiario";
 import { collectInventoryDrop } from "@/lib/inventario";
+import { listItems } from "@/lib/itens";
 import { findNearestWalkableTile, findPathAStar, RENDER_BASE_HEIGHT, TILE_SIZE } from "@/lib/map-grid";
 import type { GridPoint } from "@/lib/map-grid";
 import { getActiveMap, listActivePlayers, updateActiveState, usePortal } from "@/lib/mapas";
 import { acceptNpcQuest, buyFromNpc, craftAtNpc, deliverNpcQuest, listActiveMapNpcs, listPlayerQuests, registerEnemyDefeat, registerNpcTalk } from "@/lib/npcs";
+import { cn } from "@/lib/utils";
 import type { GameMap } from "@/types/mapa";
 import type { BestiaryAnima } from "@/types/bestiary-anima";
-import type { ActiveMapNpc, NpcDialog, PlayerQuest, QuestType } from "@/types/npc";
+import type { ActiveMapNpc, NpcDialog, NpcShopBuyOffer, NpcShopCraftRecipe, PlayerQuest, QuestType } from "@/types/npc";
+import type { Item } from "@/types/item";
+import type { AdoptedAnima } from "@/types/adocao";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -136,6 +140,17 @@ type DamageText = {
   fromEnemy: boolean;
 };
 
+type RewardFloatingText = {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  createdAt: number;
+  ttlMs: number;
+  color: string;
+  scale: number;
+};
+
 type AttackEffect = {
   id: string;
   fromX: number;
@@ -145,6 +160,30 @@ type AttackEffect = {
   createdAt: number;
   ttlMs: number;
   fromEnemy: boolean;
+  critical: boolean;
+};
+
+type ImpactParticle = {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  createdAt: number;
+  ttlMs: number;
+  size: number;
+  color: string;
+  glow: boolean;
+  gravity: number;
+};
+
+type ImpactRing = {
+  id: string;
+  x: number;
+  y: number;
+  createdAt: number;
+  ttlMs: number;
+  color: string;
   critical: boolean;
 };
 
@@ -212,6 +251,11 @@ type NpcInteractionQuestEntry = {
   mode: "accept" | "deliver";
   questId: string | null;
   title: string;
+};
+
+type EvolutionVfxState = {
+  active: boolean;
+  tone: "evolved" | "regressed";
 };
 
 const getDataUrlMime = (dataUrl: string) => {
@@ -438,6 +482,19 @@ const toHealthRatio = (hp: number, maxHp: number) => {
   return clamp(hp / maxHp, 0, 1);
 };
 
+const getIdleBreath = (now: number, seed: number, enabled: boolean) => {
+  if (!enabled) {
+    return { bobY: 0, scaleX: 1, scaleY: 1, shadowPulse: 0 };
+  }
+  const wave = (Math.sin(now / 180 + seed) + 1) * 0.5;
+  return {
+    bobY: wave * 1.4,
+    scaleX: 1 - wave * 0.018,
+    scaleY: 1 + wave * 0.028,
+    shadowPulse: -wave * 0.04,
+  };
+};
+
 const drawSpriteShadow = (
   context: CanvasRenderingContext2D,
   sprite: CanvasImageSource | null,
@@ -623,7 +680,13 @@ export const ExplorarPage = () => {
   const portalPromptRef = useRef<PortalPromptState | null>(null);
   const teleportingRef = useRef(false);
   const damageTextsRef = useRef<DamageText[]>([]);
+  const rewardTextsRef = useRef<RewardFloatingText[]>([]);
   const attackEffectsRef = useRef<AttackEffect[]>([]);
+  const impactParticlesRef = useRef<ImpactParticle[]>([]);
+  const impactRingsRef = useRef<ImpactRing[]>([]);
+  const levelUpAuraRef = useRef<{ startedAt: number; ttlMs: number; level: number } | null>(null);
+  const cameraShakeRef = useRef<{ startedAt: number; ttlMs: number; strength: number } | null>(null);
+  const screenFlashRef = useRef<{ startedAt: number; ttlMs: number; intensity: number; color: string } | null>(null);
   const otherPlayersRef = useRef<Map<string, OtherPlayerRuntime>>(new Map());
   const groundDropsRef = useRef<GroundDrop[]>([]);
   const dropImageMapRef = useRef<Map<string, HTMLImageElement>>(new Map());
@@ -685,6 +748,15 @@ export const ExplorarPage = () => {
   const [npcConversationState, setNpcConversationState] = useState<NpcConversationState | null>(null);
   const [npcShopState, setNpcShopState] = useState<NpcShopState | null>(null);
   const [shopSubmittingKey, setShopSubmittingKey] = useState<string | null>(null);
+  const [craftSearch, setCraftSearch] = useState("");
+  const [confirmShopAction, setConfirmShopAction] = useState<
+    | { type: "buy"; offer: NpcShopBuyOffer }
+    | { type: "craft"; recipe: NpcShopCraftRecipe }
+    | null
+  >(null);
+  const [actionResult, setActionResult] = useState<{ title: string; description: string } | null>(null);
+  const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [itemCatalog, setItemCatalog] = useState<Map<string, Item>>(new Map());
   const [activeQuests, setActiveQuests] = useState<PlayerQuest[]>([]);
   const [completedQuests, setCompletedQuests] = useState<PlayerQuest[]>([]);
   const [questDetail, setQuestDetail] = useState<PlayerQuest | null>(null);
@@ -692,6 +764,8 @@ export const ExplorarPage = () => {
   const [npcConversationSubmitting, setNpcConversationSubmitting] = useState(false);
   const [questHudOffset, setQuestHudOffset] = useState({ x: 0, y: 0 });
   const [questHudDragging, setQuestHudDragging] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [evolutionVfx, setEvolutionVfx] = useState<EvolutionVfxState | null>(null);
   const questHudDragRef = useRef<{
     pointerId: number;
     startPointerX: number;
@@ -707,6 +781,160 @@ export const ExplorarPage = () => {
   useEffect(() => {
     teleportingRef.current = teleporting;
   }, [teleporting]);
+
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("explore:focus-mode", {
+        detail: { enabled: focusMode },
+      }),
+    );
+  }, [focusMode]);
+
+  useEffect(() => {
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent("explore:focus-mode", {
+          detail: { enabled: false },
+        }),
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    const onAnimaEvolved = (
+      event: Event & {
+        detail?: {
+          action?: "evolved" | "regressed";
+          from: AdoptedAnima;
+          to: AdoptedAnima;
+        };
+      },
+    ) => {
+      const detail = event.detail;
+      if (!detail?.to) {
+        return;
+      }
+      const tone = detail.action === "regressed" ? "regressed" : "evolved";
+
+      const evolved = detail.to;
+      playerRef.current.animaName = evolved.nickname?.trim() || evolved.baseAnima.name || "Anima";
+      playerRef.current.level = Math.max(1, evolved.level);
+      playerRef.current.experience = Math.max(0, evolved.experience);
+      playerRef.current.experienceMax = Math.max(1, evolved.experienceMax);
+      playerRef.current.maxHp = Math.max(1, evolved.totalMaxHp ?? evolved.baseAnima.maxHp ?? 100);
+      playerRef.current.hp = clamp(evolved.currentHp, 1, playerRef.current.maxHp);
+      playerRef.current.attack = Math.max(1, evolved.totalAttack ?? evolved.baseAnima.attack ?? 36);
+      playerRef.current.defense = Math.max(0, evolved.totalDefense ?? evolved.baseAnima.defense ?? 14);
+      playerRef.current.critChance = clamp(evolved.totalCritChance ?? evolved.baseAnima.critChance ?? 6, 0, 100);
+      playerRef.current.attackIntervalMs = Math.max(
+        160,
+        Math.floor((evolved.totalAttackSpeedSeconds ?? evolved.baseAnima.attackSpeedSeconds ?? 0.9) * 1000),
+      );
+      const nextScale = Math.max(evolved.baseAnima.spriteScale ?? 3, 0.1);
+      playerRef.current.scaleX = nextScale;
+      playerRef.current.scaleY = nextScale;
+      spriteBaseFlipRef.current = evolved.baseAnima.flipHorizontal === false ? 1 : -1;
+
+      const now = performance.now();
+      screenFlashRef.current = {
+        startedAt: now,
+        ttlMs: 260,
+        intensity: 0.62,
+        color: tone === "evolved" ? "rgba(103, 232, 249, 1)" : "rgba(251, 191, 36, 1)",
+      };
+      cameraShakeRef.current = {
+        startedAt: now,
+        ttlMs: 360,
+        strength: 0.85,
+      };
+      const centerX = playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2;
+      const centerY = playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.45;
+      impactRingsRef.current.push({
+        id: `${now}_evo_ring`,
+        x: centerX,
+        y: centerY,
+        createdAt: now,
+        ttlMs: 760,
+        color: tone === "evolved" ? "rgba(34, 211, 238, 1)" : "rgba(251, 191, 36, 1)",
+        critical: true,
+      });
+      impactRingsRef.current.push({
+        id: `${now}_evo_ring_secondary`,
+        x: centerX,
+        y: centerY,
+        createdAt: now + 90,
+        ttlMs: 920,
+        color: tone === "evolved" ? "rgba(167, 243, 208, 1)" : "rgba(254, 215, 170, 1)",
+        critical: true,
+      });
+
+      for (let index = 0; index < 30; index += 1) {
+        const angle = (Math.PI * 2 * index) / 30 + Math.random() * 0.2;
+        const speed = 1.5 + Math.random() * 2.6;
+        impactParticlesRef.current.push({
+          id: `${now}_evo_particle_${index}`,
+          x: centerX,
+          y: centerY,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed - 1.2,
+          createdAt: now,
+          ttlMs: 760 + Math.floor(Math.random() * 280),
+          size: 2.8 + Math.random() * 2.6,
+          color: tone === "evolved" ? "rgba(125, 211, 252, 0.95)" : "rgba(251, 191, 36, 0.95)",
+          glow: true,
+          gravity: 0.03,
+        });
+      }
+      setEvolutionVfx({
+        active: true,
+        tone,
+      });
+
+      const fromImage = detail.from?.baseAnima?.imageData ?? null;
+      if (fromImage) {
+        setSpriteData(fromImage);
+      }
+
+      window.setTimeout(() => {
+        setSpriteData(evolved.baseAnima.imageData ?? null);
+        screenFlashRef.current = {
+          startedAt: performance.now(),
+          ttlMs: 180,
+          intensity: 0.38,
+          color: tone === "evolved" ? "rgba(103, 232, 249, 1)" : "rgba(251, 191, 36, 1)",
+        };
+      }, 260);
+      window.setTimeout(() => {
+        setEvolutionVfx(null);
+      }, 1650);
+    };
+
+    window.addEventListener("explore:anima-evolved", onAnimaEvolved as EventListener);
+    return () => {
+      window.removeEventListener("explore:anima-evolved", onAnimaEvolved as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    listItems()
+      .then((items) => {
+        if (!active) {
+          return;
+        }
+        setItemCatalog(new Map(items.map((item) => [item.id, item])));
+      })
+      .catch((error) => {
+        if (error instanceof ApiError) {
+          setErrorMessage(error.message);
+        } else {
+          setErrorMessage("Falha ao carregar itens.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const persistState = useCallback(async (tileX: number, tileY: number, scaleX: number, scaleY: number) => {
     try {
@@ -932,6 +1160,39 @@ export const ExplorarPage = () => {
     [buildNavigationCollisionLayer, mapData, resolvePointerDestination],
   );
 
+  const planNpcApproach = useCallback(
+    (npc: ActiveMapNpc) => {
+      if (!mapData) {
+        return false;
+      }
+      const playerPoint = { x: playerRef.current.tileX, y: playerRef.current.tileY };
+      const npcPoint = { x: npc.tileX, y: npc.tileY };
+      if (isAdjacentTile(playerPoint, npcPoint)) {
+        return false;
+      }
+      const navigationLayer = buildNavigationCollisionLayer(mapData);
+      const candidates = enemyDirections
+        .map((direction) => ({ x: npcPoint.x + direction.x, y: npcPoint.y + direction.y }))
+        .filter((candidate) => isWalkableForPlayer(mapData, candidate, navigationLayer));
+      let destination: GridPoint | null = null;
+      if (candidates.length > 0) {
+        destination = candidates.reduce((best, candidate) => {
+          const bestDistance = Math.hypot(best.x - playerPoint.x, best.y - playerPoint.y);
+          const candidateDistance = Math.hypot(candidate.x - playerPoint.x, candidate.y - playerPoint.y);
+          return candidateDistance < bestDistance ? candidate : best;
+        }, candidates[0]);
+      } else {
+        destination = findNearestWalkableTile(npcPoint, navigationLayer);
+      }
+      if (destination) {
+        recalculatePath(destination);
+        return true;
+      }
+      return false;
+    },
+    [buildNavigationCollisionLayer, isWalkableForPlayer, mapData, recalculatePath],
+  );
+
   const pointerToTile = useCallback(
     (event: { clientX: number; clientY: number }): GridPoint | null => {
       const canvas = canvasRef.current;
@@ -1123,6 +1384,89 @@ export const ExplorarPage = () => {
     }
   }, []);
 
+  const triggerCameraShake = useCallback((strength: number, ttlMs: number) => {
+    const now = performance.now();
+    const normalizedStrength = clamp(strength, 0, 1);
+    const nextTtl = Math.max(1, ttlMs);
+    const current = cameraShakeRef.current;
+    if (!current || now - current.startedAt >= current.ttlMs) {
+      cameraShakeRef.current = { startedAt: now, ttlMs: nextTtl, strength: normalizedStrength };
+      return;
+    }
+    cameraShakeRef.current = {
+      startedAt: now,
+      ttlMs: Math.max(current.ttlMs, nextTtl),
+      strength: clamp(current.strength + normalizedStrength, 0, 1),
+    };
+  }, []);
+
+  const triggerScreenFlash = useCallback((intensity: number, ttlMs: number, color: string) => {
+    const now = performance.now();
+    const next = {
+      startedAt: now,
+      ttlMs: Math.max(1, ttlMs),
+      intensity: clamp(intensity, 0, 1),
+      color,
+    };
+    const current = screenFlashRef.current;
+    if (!current || now - current.startedAt >= current.ttlMs) {
+      screenFlashRef.current = next;
+      return;
+    }
+    screenFlashRef.current = {
+      ...next,
+      intensity: clamp(current.intensity + next.intensity * 0.7, 0, 1),
+      ttlMs: Math.max(current.ttlMs, next.ttlMs),
+    };
+  }, []);
+
+  const spawnImpactVfx = useCallback((x: number, y: number, fromEnemy: boolean, critical: boolean) => {
+    const now = performance.now();
+    const baseColor = fromEnemy ? "rgba(251, 146, 60, 1)" : "rgba(248, 113, 113, 1)";
+    const critColor = "rgba(253, 224, 71, 1)";
+    const primary = critical ? critColor : baseColor;
+    const particleCount = critical ? 18 : 12;
+    const baseSpeed = critical ? 560 : 420;
+    const ttlBase = critical ? 520 : 420;
+
+    impactRingsRef.current.push({
+      id: `${now}_ring_${Math.random().toString(16).slice(2, 8)}`,
+      x,
+      y,
+      createdAt: now,
+      ttlMs: critical ? 420 : 340,
+      color: primary,
+      critical,
+    });
+
+    for (let i = 0; i < particleCount; i += 1) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = baseSpeed * (0.55 + Math.random() * 0.75);
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed - (critical ? 140 : 90);
+      impactParticlesRef.current.push({
+        id: `${now}_p_${i}_${Math.random().toString(16).slice(2, 6)}`,
+        x,
+        y,
+        vx,
+        vy,
+        createdAt: now,
+        ttlMs: ttlBase * (0.7 + Math.random() * 0.6),
+        size: critical ? 2.2 + Math.random() * 1.8 : 1.6 + Math.random() * 1.4,
+        color: i % 4 === 0 ? "rgba(248, 250, 252, 1)" : primary,
+        glow: i % 3 !== 0,
+        gravity: critical ? 980 : 860,
+      });
+    }
+
+    triggerCameraShake(critical ? (fromEnemy ? 0.55 : 0.7) : fromEnemy ? 0.35 : 0.42, critical ? 260 : 200);
+    if (critical) {
+      triggerScreenFlash(fromEnemy ? 0.22 : 0.28, 120, "rgba(253, 224, 71, 1)");
+    } else if (fromEnemy) {
+      triggerScreenFlash(0.12, 90, "rgba(251, 146, 60, 1)");
+    }
+  }, [triggerCameraShake, triggerScreenFlash]);
+
   const pushDamageText = useCallback((x: number, y: number, value: number, critical: boolean, fromEnemy: boolean) => {
     damageTextsRef.current.push({
       id: `${performance.now()}_${Math.random().toString(16).slice(2, 8)}`,
@@ -1136,7 +1480,21 @@ export const ExplorarPage = () => {
     });
   }, []);
 
+  const pushRewardText = useCallback((x: number, y: number, text: string, color: string, scale = 1) => {
+    rewardTextsRef.current.push({
+      id: `${performance.now()}_${Math.random().toString(16).slice(2, 8)}`,
+      x,
+      y,
+      text,
+      color,
+      scale,
+      createdAt: performance.now(),
+      ttlMs: 1000,
+    });
+  }, []);
+
   const pushAttackEffect = useCallback((fromX: number, fromY: number, toX: number, toY: number, fromEnemy: boolean, critical: boolean) => {
+    spawnImpactVfx(toX, toY, fromEnemy, critical);
     attackEffectsRef.current.push({
       id: `${performance.now()}_${Math.random().toString(16).slice(2, 8)}`,
       fromX,
@@ -1148,7 +1506,7 @@ export const ExplorarPage = () => {
       createdAt: performance.now(),
       ttlMs: ATTACK_EFFECT_TTL_MS,
     });
-  }, []);
+  }, [spawnImpactVfx]);
 
   const spawnGroundDropsForEnemy = useCallback((enemy: EnemyRuntime, now: number) => {
     const group = enemyGroupsRef.current.get(enemy.groupId);
@@ -1417,6 +1775,9 @@ export const ExplorarPage = () => {
       dialogs: NpcDialog[],
       questAction: { mode: "accept" | "deliver"; questId: string | null } = { mode: "accept", questId: null },
     ) => {
+      if (planNpcApproach(npc)) {
+        return;
+      }
       if (dialogs.length === 0) {
         return;
       }
@@ -1429,7 +1790,7 @@ export const ExplorarPage = () => {
         questAction,
       });
     },
-    [],
+    [planNpcApproach],
   );
 
   const handleAdvanceNpcConversation = useCallback(async () => {
@@ -1464,6 +1825,79 @@ export const ExplorarPage = () => {
     setNpcConversationSubmitting(false);
   }, [npcConversationState, npcConversationSubmitting, runNpcDialogAction]);
 
+  const handleConfirmShopAction = useCallback(async () => {
+    if (!confirmShopAction || !npcShopState) {
+      return;
+    }
+    setActionSubmitting(true);
+    if (confirmShopAction.type === "buy") {
+      const offer = confirmShopAction.offer;
+      setShopSubmittingKey(offer.id);
+      try {
+        const result = await buyFromNpc({
+          npcId: npcShopState.npcId,
+          dialogId: npcShopState.dialogId,
+          offerId: offer.id,
+        });
+        setErrorMessage(null);
+        setConfirmShopAction(null);
+        setActionResult({
+          title: "Compra concluida",
+          description: `${offer.itemName ?? offer.itemId} x${result.quantity} adicionado ao inventario.`,
+        });
+      } catch (error) {
+        if (error instanceof ApiError) {
+          setErrorMessage(null);
+          setActionResult({
+            title: "Nao foi possivel comprar",
+            description: error.message,
+          });
+        } else {
+          setActionResult({
+            title: "Nao foi possivel comprar",
+            description: "Falha ao comprar item.",
+          });
+        }
+      } finally {
+        setShopSubmittingKey(null);
+        setActionSubmitting(false);
+      }
+      return;
+    }
+
+    const recipe = confirmShopAction.recipe;
+    setShopSubmittingKey(recipe.id);
+    try {
+      const result = await craftAtNpc({
+        npcId: npcShopState.npcId,
+        dialogId: npcShopState.dialogId,
+        recipeId: recipe.id,
+      });
+      setErrorMessage(null);
+      setConfirmShopAction(null);
+      setActionResult({
+        title: "Craft concluido",
+        description: `${recipe.resultItemName ?? recipe.resultItemId} x${result.quantity} criado.`,
+      });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorMessage(null);
+        setActionResult({
+          title: "Nao foi possivel craftar",
+          description: error.message,
+        });
+      } else {
+        setActionResult({
+          title: "Nao foi possivel craftar",
+          description: "Falha ao craftar item.",
+        });
+      }
+    } finally {
+      setShopSubmittingKey(null);
+      setActionSubmitting(false);
+    }
+  }, [confirmShopAction, npcShopState]);
+
   const confirmPortalTeleport = useCallback(async () => {
     if (!portalPrompt || teleporting) {
       return;
@@ -1495,6 +1929,7 @@ export const ExplorarPage = () => {
       selectedEnemyIdRef.current = null;
       engagedEnemyIdRef.current = null;
       damageTextsRef.current = [];
+      rewardTextsRef.current = [];
       attackEffectsRef.current = [];
       groundDropsRef.current = [];
       dropImageMapRef.current = new Map();
@@ -1689,6 +2124,7 @@ export const ExplorarPage = () => {
       enemiesRef.current = [];
       otherPlayersRef.current = new Map();
       damageTextsRef.current = [];
+      rewardTextsRef.current = [];
       attackEffectsRef.current = [];
       groundDropsRef.current = [];
       dropImageMapRef.current = new Map();
@@ -1747,6 +2183,8 @@ export const ExplorarPage = () => {
 
   useEffect(() => {
     groundDropsRef.current = [];
+    rewardTextsRef.current = [];
+    levelUpAuraRef.current = null;
     dropImageMapRef.current = new Map();
     collectingDropIdRef.current = null;
     setNpcInteractionState(null);
@@ -2079,9 +2517,34 @@ export const ExplorarPage = () => {
                     droppedItems,
                   })
                     .then((reward) => {
+                      const previousLevel = playerRef.current.level;
                       playerRef.current.level = Math.max(1, reward.level);
                       playerRef.current.experience = Math.max(0, reward.experience);
                       playerRef.current.experienceMax = Math.max(1, reward.experienceMax);
+                      const rewardX = playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2;
+                      const rewardY = playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.1;
+                      if (reward.xpGained > 0) {
+                        pushRewardText(rewardX, rewardY, `+${reward.xpGained} XP`, "rgba(125, 211, 252, 1)", 0.98);
+                      }
+                      if (reward.bitsGained > 0) {
+                        pushRewardText(rewardX + 2, rewardY + 14, `+${reward.bitsGained} Bits`, "rgba(253, 230, 138, 1)", 0.96);
+                      }
+                      if (reward.level > previousLevel) {
+                        const nowLevelUp = performance.now();
+                        levelUpAuraRef.current = { startedAt: nowLevelUp, ttlMs: 1700, level: reward.level };
+                        triggerCameraShake(0.62, 280);
+                        triggerScreenFlash(0.24, 180, "rgba(167, 243, 208, 1)");
+                        impactRingsRef.current.push({
+                          id: `${nowLevelUp}_level_ring`,
+                          x: rewardX,
+                          y: playerRef.current.renderY * TILE_SIZE + TILE_SIZE * 0.45,
+                          createdAt: nowLevelUp,
+                          ttlMs: 820,
+                          color: "rgba(74, 222, 128, 1)",
+                          critical: true,
+                        });
+                        pushRewardText(rewardX, rewardY - 14, `Lv ${reward.level}`, "rgba(134, 239, 172, 1)", 1.02);
+                      }
                       setActiveQuests(reward.activeQuests);
                     })
                     .catch((error) => {
@@ -2526,10 +2989,25 @@ export const ExplorarPage = () => {
 
       const playerWorldX = playerRef.current.renderX * TILE_SIZE + TILE_SIZE / 2;
       const playerWorldY = playerRef.current.renderY * TILE_SIZE + TILE_SIZE / 2;
-      const maxCameraX = Math.max(0, map.worldWidth - width);
-      const maxCameraY = Math.max(0, map.worldHeight - height);
-      const cameraX = clamp(playerWorldX - width / 2, 0, maxCameraX);
-      const cameraY = clamp(playerWorldY - height / 2, 0, maxCameraY);
+      const baseCameraX = playerWorldX - width / 2;
+      const baseCameraY = playerWorldY - height / 2;
+
+      let shakeX = 0;
+      let shakeY = 0;
+      const shake = cameraShakeRef.current;
+      if (shake) {
+        const t = clamp((now - shake.startedAt) / shake.ttlMs, 0, 1);
+        const fade = 1 - t;
+        const amplitude = 8.5 * shake.strength * fade;
+        shakeX = Math.sin(now * 0.035 + 1.1) * amplitude;
+        shakeY = Math.cos(now * 0.041 + 0.3) * amplitude * 0.7;
+        if (t >= 1) {
+          cameraShakeRef.current = null;
+        }
+      }
+
+      const cameraX = baseCameraX + shakeX;
+      const cameraY = baseCameraY + shakeY;
       cameraRef.current = { x: cameraX, y: cameraY, width, height };
 
       context.fillStyle = "rgba(15, 15, 15, 1)";
@@ -2537,7 +3015,7 @@ export const ExplorarPage = () => {
       context.save();
       context.translate(-cameraX, -cameraY);
 
-      context.fillStyle = "#161616";
+      context.fillStyle = "#050814";
       context.fillRect(0, 0, map.worldWidth, map.worldHeight);
 
       const bgImage = backgroundImageRef.current;
@@ -2562,6 +3040,48 @@ export const ExplorarPage = () => {
           }
         }
       }
+
+      const viewStartTileX = Math.floor(cameraX / TILE_SIZE) - 2;
+      const viewEndTileX = Math.ceil((cameraX + width) / TILE_SIZE) + 2;
+      const viewStartTileY = Math.floor(cameraY / TILE_SIZE) - 2;
+      const viewEndTileY = Math.ceil((cameraY + height) / TILE_SIZE) + 2;
+
+      context.save();
+      context.lineWidth = 1;
+      for (let tileY = viewStartTileY; tileY <= viewEndTileY; tileY += 1) {
+        for (let tileX = viewStartTileX; tileX <= viewEndTileX; tileX += 1) {
+          if (tileX >= 0 && tileX < map.cols && tileY >= 0 && tileY < map.rows) {
+            continue;
+          }
+
+          const worldX = tileX * TILE_SIZE;
+          const worldY = tileY * TILE_SIZE;
+          const withinHorizontal = worldX < map.worldWidth && worldX + TILE_SIZE > 0;
+          const withinVertical = worldY < map.worldHeight && worldY + TILE_SIZE > 0;
+          if (!withinHorizontal && !withinVertical) {
+            // Still draw beyond world bounds to cover full viewport
+          }
+
+          const baseAlpha = 0.5;
+          context.fillStyle = `rgba(9, 9, 11, ${baseAlpha})`;
+          context.fillRect(worldX, worldY, TILE_SIZE, TILE_SIZE);
+
+          context.strokeStyle = "rgba(30, 64, 175, 0.22)";
+          context.strokeRect(worldX + 0.5, worldY + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+
+          context.strokeStyle = "rgba(15, 23, 42, 0.9)";
+          const cx = worldX + TILE_SIZE / 2;
+          const cy = worldY + TILE_SIZE / 2;
+          const crossSize = TILE_SIZE * 0.18;
+          context.beginPath();
+          context.moveTo(cx - crossSize, cy);
+          context.lineTo(cx + crossSize, cy);
+          context.moveTo(cx, cy - crossSize);
+          context.lineTo(cx, cy + crossSize);
+          context.stroke();
+        }
+      }
+      context.restore();
 
       if ((map.portals ?? []).length > 0) {
         for (const portal of map.portals) {
@@ -2741,18 +3261,23 @@ export const ExplorarPage = () => {
           depth: baseY,
           order: entityOrder,
           draw: () => {
+            const breath = getIdleBreath(now, otherPlayer.tileX * 0.33 + otherPlayer.tileY * 0.57, true);
             context.save();
             context.fillStyle = "rgba(2, 6, 23, 0.32)";
             context.beginPath();
             context.ellipse(centerX, baseY - 2, Math.max(6, bodyWidth * 0.8), 3.2, 0, 0, Math.PI * 2);
             context.fill();
 
+            context.save();
+            context.translate(centerX, baseY - breath.bobY);
+            context.scale(breath.scaleX, breath.scaleY);
             context.fillStyle = "rgba(148, 163, 184, 0.92)";
-            context.fillRect(centerX - bodyWidth / 2, baseY - bodyHeight, bodyWidth, bodyHeight * 0.78);
+            context.fillRect(-bodyWidth / 2, -bodyHeight, bodyWidth, bodyHeight * 0.78);
             context.fillStyle = "rgba(226, 232, 240, 0.96)";
             context.beginPath();
-            context.arc(centerX, baseY - bodyHeight - 2.8, bodyWidth * 0.36, 0, Math.PI * 2);
+            context.arc(0, -bodyHeight - 2.8, bodyWidth * 0.36, 0, Math.PI * 2);
             context.fill();
+            context.restore();
 
             context.font = "600 10px Geist, sans-serif";
             const textWidth = Math.min(120, Math.max(42, context.measureText(label).width + 14));
@@ -2804,11 +3329,20 @@ export const ExplorarPage = () => {
             context.fill();
 
             const npcSprite = asset ? resolveSpriteFrame(asset.frames, asset.animation, now) ?? asset.image : null;
+            const npcBreath = getIdleBreath(now, npc.tileX * 0.29 + npc.tileY * 0.71, !asset?.frames);
             if (npcSprite) {
-              context.drawImage(npcSprite, centerX - width / 2, baseY - height, width, height);
+              context.save();
+              context.translate(centerX, baseY - npcBreath.bobY);
+              context.scale(npcBreath.scaleX, npcBreath.scaleY);
+              context.drawImage(npcSprite, -width / 2, -height, width, height);
+              context.restore();
             } else {
               context.fillStyle = "rgba(148, 163, 184, 0.9)";
-              context.fillRect(centerX - width / 2, baseY - height, width, height);
+              context.save();
+              context.translate(centerX, baseY - npcBreath.bobY);
+              context.scale(npcBreath.scaleX, npcBreath.scaleY);
+              context.fillRect(-width / 2, -height, width, height);
+              context.restore();
             }
 
             const label = npc.npc?.name ?? npc.npcName ?? "NPC";
@@ -2923,6 +3457,10 @@ export const ExplorarPage = () => {
         const walkScaleX = enemy.moving ? 1 + walkStretch * 0.035 : 1;
         const walkScaleY = enemy.moving ? 1 - walkStretch * 0.05 : 1;
         const walkStepX = enemy.moving ? Math.cos(walkPhase) * 0.7 : 0;
+        const enemyAsset = enemySpriteMapRef.current.get(enemy.groupId) ?? null;
+        const enemyBreath = getIdleBreath(now, enemy.tileX * 0.61 + enemy.tileY * 0.37, !enemy.moving && !enemyAsset?.frames);
+        const finalEnemyScaleX = walkScaleX * enemyBreath.scaleX;
+        const finalEnemyScaleY = walkScaleY * enemyBreath.scaleY;
         const baseFlip = group.flipHorizontal ? -1 : 1;
         const directionalFlip = enemy.facingX > 0 ? -1 : 1;
         const finalFlip = baseFlip * directionalFlip;
@@ -2970,19 +3508,19 @@ export const ExplorarPage = () => {
               drawWidth,
               drawHeight,
               finalFlip,
-              (0.15 + shadowPulse) * shadowFade,
+              (0.15 + shadowPulse + enemyBreath.shadowPulse) * shadowFade,
             );
 
             context.save();
             context.globalAlpha = deathAlpha;
             context.translate(
               centerX + lungeOffsetX + enemyShakeX + walkStepX,
-              baseY - bobY + lungeOffsetY + enemyShakeY + spawnLift - deathProgress * 8,
+              baseY - bobY - enemyBreath.bobY + lungeOffsetY + enemyShakeY + spawnLift - deathProgress * 8,
             );
             if (enemy.moving) {
               context.rotate(walkSwing);
             }
-            context.scale(finalFlip * walkScaleX, walkScaleY);
+            context.scale(finalFlip * finalEnemyScaleX, finalEnemyScaleY);
             if (sprite) {
               if (deathProgress > 0) {
                 drawSpriteDeathDissolve(context, sprite, spriteWidth, spriteHeight, drawWidth, drawHeight, deathProgress, deathSeed);
@@ -3072,6 +3610,9 @@ export const ExplorarPage = () => {
       const playerWalkScaleX = playerRef.current.moving ? 1 + playerWalkStretch * 0.032 : 1;
       const playerWalkScaleY = playerRef.current.moving ? 1 - playerWalkStretch * 0.048 : 1;
       const playerWalkStepX = playerRef.current.moving ? Math.cos(playerWalkPhase) * 0.66 : 0;
+      const playerBreath = getIdleBreath(now, playerRef.current.tileX * 0.47 + playerRef.current.tileY * 0.29, !playerRef.current.moving && !spriteFramesRef.current);
+      const finalPlayerScaleX = playerWalkScaleX * playerBreath.scaleX;
+      const finalPlayerScaleY = playerWalkScaleY * playerBreath.scaleY;
       const playerLungeProgress = playerRef.current.attackLungeUntil > now ? 1 - (playerRef.current.attackLungeUntil - now) / ATTACK_LUNGE_DURATION_MS : 0;
       const playerLungePingPong = playerLungeProgress < 0.5 ? playerLungeProgress * 2 : (1 - playerLungeProgress) * 2;
       const playerLungePhase = clamp(playerLungePingPong, 0, 1);
@@ -3111,18 +3652,18 @@ export const ExplorarPage = () => {
             spriteBaseWidth,
             spriteBaseHeight,
             playerRef.current.facingX * spriteBaseFlipRef.current,
-            0.17 + playerShadowPulse,
+            0.17 + playerShadowPulse + playerBreath.shadowPulse,
           );
 
           context.save();
           context.translate(
             playerCenterX + playerLungeOffsetX + playerShakeX + playerWalkStepX,
-            playerBaseY - playerBobY + playerLungeOffsetY + playerShakeY,
+            playerBaseY - playerBobY - playerBreath.bobY + playerLungeOffsetY + playerShakeY,
           );
           if (playerRef.current.moving) {
             context.rotate(playerWalkSwing);
           }
-          context.scale(playerRef.current.facingX * spriteBaseFlipRef.current * playerWalkScaleX, playerWalkScaleY);
+          context.scale(playerRef.current.facingX * spriteBaseFlipRef.current * finalPlayerScaleX, finalPlayerScaleY);
           if (playerSprite) {
             context.drawImage(playerSprite, -spriteBaseWidth / 2, -spriteBaseHeight, spriteBaseWidth, spriteBaseHeight);
             if (playerRef.current.hitFlashUntil > now) {
@@ -3139,6 +3680,34 @@ export const ExplorarPage = () => {
             context.fill();
           }
           context.restore();
+
+          const levelAura = levelUpAuraRef.current;
+          if (levelAura) {
+            const auraT = clamp((now - levelAura.startedAt) / levelAura.ttlMs, 0, 1);
+            if (auraT < 1) {
+              const auraAlpha = (1 - auraT) * 0.65;
+              const auraRadius = Math.max(spriteBaseWidth, spriteBaseHeight) * (0.42 + auraT * 0.88);
+              context.save();
+              context.globalCompositeOperation = "lighter";
+              context.globalAlpha = auraAlpha;
+              const auraGradient = context.createRadialGradient(playerCenterX, playerBaseY - spriteBaseHeight * 0.56, auraRadius * 0.2, playerCenterX, playerBaseY - spriteBaseHeight * 0.56, auraRadius);
+              auraGradient.addColorStop(0, "rgba(134, 239, 172, 0.7)");
+              auraGradient.addColorStop(0.55, "rgba(74, 222, 128, 0.35)");
+              auraGradient.addColorStop(1, "rgba(16, 185, 129, 0)");
+              context.fillStyle = auraGradient;
+              context.beginPath();
+              context.arc(playerCenterX, playerBaseY - spriteBaseHeight * 0.56, auraRadius, 0, Math.PI * 2);
+              context.fill();
+              context.strokeStyle = `rgba(167, 243, 208, ${0.88 * auraAlpha})`;
+              context.lineWidth = 2.4;
+              context.beginPath();
+              context.arc(playerCenterX, playerBaseY - spriteBaseHeight * 0.56, auraRadius * 0.82, 0, Math.PI * 2);
+              context.stroke();
+              context.restore();
+            } else {
+              levelUpAuraRef.current = null;
+            }
+          }
 
           context.save();
           drawRoundedRect(context, playerPanelX, playerPanelY, playerPanelWidth, playerPanelHeight, 9);
@@ -3267,6 +3836,62 @@ export const ExplorarPage = () => {
         context.restore();
       }
 
+      impactRingsRef.current = impactRingsRef.current.filter((ring) => now - ring.createdAt < ring.ttlMs);
+      for (const ring of impactRingsRef.current) {
+        const t = clamp((now - ring.createdAt) / ring.ttlMs, 0, 1);
+        const alpha = (1 - t) * (ring.critical ? 0.95 : 0.8);
+        const radius = (ring.critical ? 9 : 7) + t * (ring.critical ? 34 : 26);
+        context.save();
+        context.globalAlpha = alpha;
+        context.globalCompositeOperation = "lighter";
+        context.translate(ring.x, ring.y);
+        context.strokeStyle = ring.color.replace(", 1)", `, ${0.85 * alpha})`);
+        context.lineWidth = ring.critical ? 3.2 : 2.4;
+        context.beginPath();
+        context.arc(0, 0, radius, 0, Math.PI * 2);
+        context.stroke();
+        context.strokeStyle = "rgba(248, 250, 252, 0.75)";
+        context.lineWidth = ring.critical ? 1.4 : 1.1;
+        context.beginPath();
+        context.arc(0, 0, radius * 0.62, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
+      }
+
+      impactParticlesRef.current = impactParticlesRef.current.filter((particle) => now - particle.createdAt < particle.ttlMs);
+      for (const particle of impactParticlesRef.current) {
+        const ageMs = now - particle.createdAt;
+        const t = clamp(ageMs / particle.ttlMs, 0, 1);
+        const dt = ageMs / 1000;
+        const alpha = (1 - t) * (particle.glow ? 0.95 : 0.75);
+        const px = particle.x + particle.vx * dt;
+        const py = particle.y + particle.vy * dt + 0.5 * particle.gravity * dt * dt;
+        const tailX = px - particle.vx * 0.018;
+        const tailY = py - particle.vy * 0.018;
+
+        context.save();
+        context.globalAlpha = alpha;
+        context.globalCompositeOperation = particle.glow ? "lighter" : "source-over";
+        context.strokeStyle = particle.color.replace(", 1)", `, ${0.92 * alpha})`);
+        context.lineWidth = particle.size;
+        context.lineCap = "round";
+        context.beginPath();
+        context.moveTo(tailX, tailY);
+        context.lineTo(px, py);
+        context.stroke();
+
+        if (particle.glow) {
+          context.globalAlpha = alpha * 0.35;
+          context.strokeStyle = "rgba(248, 250, 252, 1)".replace(", 1)", `, ${0.55 * alpha})`);
+          context.lineWidth = Math.max(1.2, particle.size * 1.9);
+          context.beginPath();
+          context.moveTo(tailX, tailY);
+          context.lineTo(px, py);
+          context.stroke();
+        }
+        context.restore();
+      }
+
       damageTextsRef.current = damageTextsRef.current.filter((text) => now - text.createdAt < text.ttlMs);
       for (const text of damageTextsRef.current) {
         const t = clamp((now - text.createdAt) / text.ttlMs, 0, 1);
@@ -3290,7 +3915,45 @@ export const ExplorarPage = () => {
         context.restore();
       }
 
+      rewardTextsRef.current = rewardTextsRef.current.filter((text) => now - text.createdAt < text.ttlMs);
+      for (const text of rewardTextsRef.current) {
+        const t = clamp((now - text.createdAt) / text.ttlMs, 0, 1);
+        const yOffset = 4 + t * 18;
+        const alpha = (1 - t) * 0.78;
+        const scale = text.scale + (1 - t) * 0.04;
+        context.save();
+        context.globalAlpha = alpha;
+        context.translate(text.x, text.y - yOffset);
+        context.scale(scale, scale);
+        context.font = "600 11px Geist, sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillStyle = text.color;
+        context.strokeStyle = "rgba(2, 6, 23, 0.5)";
+        context.lineWidth = 1.6;
+        context.strokeText(text.text, 0, 0.5);
+        context.fillText(text.text, 0, 0.5);
+        context.restore();
+      }
+
       context.restore();
+
+      const flash = screenFlashRef.current;
+      if (flash) {
+        const t = clamp((now - flash.startedAt) / flash.ttlMs, 0, 1);
+        const alpha = flash.intensity * (1 - t);
+        if (alpha > 0.001) {
+          context.save();
+          context.globalAlpha = alpha;
+          context.fillStyle = flash.color.replace(", 1)", `, ${alpha})`);
+          context.fillRect(0, 0, width, height);
+          context.restore();
+        }
+        if (t >= 1) {
+          screenFlashRef.current = null;
+        }
+      }
+
       frame = requestAnimationFrame(draw);
     };
 
@@ -3375,12 +4038,14 @@ export const ExplorarPage = () => {
 
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-        <Compass className="h-4 w-4" />
-        <p className="text-xs uppercase tracking-wide">Explorar</p>
-        <Badge variant="secondary">{mapData?.name ?? "Mapa ativo"}</Badge>
-      </div>
+    <section className={focusMode ? "h-screen w-full overflow-hidden bg-black" : "space-y-4"}>
+      {focusMode ? null : (
+        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          <Compass className="h-4 w-4" />
+          <p className="text-xs uppercase tracking-wide">Explorar</p>
+          <Badge variant="secondary">{mapData?.name ?? "Mapa ativo"}</Badge>
+        </div>
+      )}
 
       {errorMessage ? <p className="text-sm text-red-500">{errorMessage}</p> : null}
       {loading ? <p className="text-sm text-muted-foreground">Carregando mapa...</p> : null}
@@ -3393,7 +4058,11 @@ export const ExplorarPage = () => {
       >
         <canvas
           ref={canvasRef}
-          className="h-[74vh] min-h-[520px] w-full rounded-md border bg-black/30 select-none"
+          className={
+            focusMode
+              ? "h-screen min-h-screen w-full border-0 bg-black select-none"
+              : "h-[74vh] min-h-[520px] w-full rounded-md border bg-black/30 select-none"
+          }
           onContextMenu={(event) => {
             event.preventDefault();
           }}
@@ -3422,6 +4091,9 @@ export const ExplorarPage = () => {
                 routeAllowsCornerCutRef.current = false;
                 collectingDropIdRef.current = null;
                 cancelTracking();
+                if (planNpcApproach(npc)) {
+                  return;
+                }
                 const dialogs = npc.npc?.dialogs ?? [];
                 if (dialogs.length > 0) {
                   setNpcConversationState(null);
@@ -3502,7 +4174,21 @@ export const ExplorarPage = () => {
             setCanvasCursorMode("default");
           }}
         />
-        <FloatingBagMenu embedded />
+        {evolutionVfx?.active ? (
+          <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center">
+            <div
+              className={cn(
+                "absolute inset-0 animate-pulse",
+                evolutionVfx.tone === "evolved"
+                  ? "bg-[radial-gradient(circle_at_center,rgba(34,211,238,0.26)_0%,rgba(34,211,238,0.09)_40%,rgba(2,6,23,0.65)_100%)]"
+                  : "bg-[radial-gradient(circle_at_center,rgba(251,191,36,0.26)_0%,rgba(251,191,36,0.09)_40%,rgba(2,6,23,0.65)_100%)]",
+              )}
+            />
+            <div className="absolute h-52 w-52 rounded-full border border-white/20 animate-ping" />
+            <div className={cn("absolute h-72 w-72 rounded-full border animate-pulse", evolutionVfx.tone === "evolved" ? "border-cyan-300/30" : "border-amber-300/30")} />
+          </div>
+        ) : null}
+        <FloatingBagMenu embedded focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} />
         {npcInteractionState && npcOverlayPosition ? (
           <div
             className="pointer-events-auto absolute z-30 w-[min(92vw,340px)] -translate-x-1/2 -translate-y-full"
@@ -3549,8 +4235,11 @@ export const ExplorarPage = () => {
                     key={`shop_buy_${dialog.id}`}
                     size="sm"
                     variant="outline"
-                    className="w-full justify-start gap-2 border-teal-400/30 bg-teal-500/10 text-teal-100 hover:bg-teal-500/20"
+                    className="w-full justify-start gap-2 border-slate-700 bg-slate-900/70 text-slate-200 hover:bg-slate-800"
                     onClick={() => {
+                      if (planNpcApproach(npcInteractionState.npc)) {
+                        return;
+                      }
                       setNpcInteractionState(null);
                       setNpcShopState({
                         npcId: npcInteractionState.npc.npcId,
@@ -3569,8 +4258,11 @@ export const ExplorarPage = () => {
                     key={`shop_craft_${dialog.id}`}
                     size="sm"
                     variant="outline"
-                    className="w-full justify-start gap-2 border-cyan-400/30 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20"
+                    className="w-full justify-start gap-2 border-slate-700 bg-slate-900/70 text-slate-200 hover:bg-slate-800"
                     onClick={() => {
+                      if (planNpcApproach(npcInteractionState.npc)) {
+                        return;
+                      }
                       setNpcInteractionState(null);
                       setNpcShopState({
                         npcId: npcInteractionState.npc.npcId,
@@ -3654,36 +4346,36 @@ export const ExplorarPage = () => {
               </button>
               <Badge className="border-slate-300/20 bg-slate-800/70 text-slate-200 hover:bg-slate-800/70">{activeQuests.length}/3</Badge>
             </div>
-            {questLoading ? <p className="px-1 text-[11px] text-slate-400">Atualizando...</p> : null}
-            {activeQuests.length === 0 ? <p className="px-1 text-[11px] text-slate-400">Nenhuma quest ativa.</p> : null}
-            <div className="space-y-1.5">
-              {activeQuests.map((quest) => {
-                const totalObjectives = Math.max(1, quest.objectives.length);
-                const completedObjectives = quest.objectives.filter((objective) => objective.completed).length;
-                return (
-                  <button
-                    key={quest.id}
-                    type="button"
-                    className="w-full rounded-lg border border-slate-300/15 bg-slate-900/40 px-2 py-2 text-left transition hover:bg-slate-900/62"
-                    onClick={() => setQuestDetail(quest)}
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <p className="truncate text-[11px] font-semibold text-slate-100">{quest.title}</p>
-                      <span className={`text-[10px] font-semibold ${quest.turnInReady ? "text-emerald-300" : "text-slate-400"}`}>
-                        {quest.turnInReady ? "Pronta" : `${completedObjectives}/${totalObjectives}`}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      {quest.objectives.map((objective) => (
-                        <p key={objective.id} className={`text-[11px] leading-snug ${objective.completed ? "text-emerald-200" : "text-slate-300"}`}>
-                          {getQuestObjectiveLabel(objective)} {objective.current}/{objective.required}
-                        </p>
-                      ))}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+              {questLoading ? <p className="px-1 text-[11px] text-slate-400">Atualizando...</p> : null}
+              {activeQuests.length === 0 ? <p className="px-1 text-[11px] text-slate-400">Nenhuma quest ativa.</p> : null}
+              <div className="space-y-1.5">
+                {activeQuests.map((quest) => {
+                  const totalObjectives = Math.max(1, quest.objectives.length);
+                  const completedObjectives = quest.objectives.filter((objective) => objective.completed).length;
+                  return (
+                    <button
+                      key={quest.id}
+                      type="button"
+                      className="w-full rounded-lg border border-slate-300/15 bg-slate-900/40 px-2 py-2 text-left transition hover:bg-slate-900/62"
+                      onClick={() => setQuestDetail(quest)}
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <p className="truncate text-[11px] font-semibold text-slate-100">{quest.title}</p>
+                        <span className={`text-[10px] font-semibold ${quest.turnInReady ? "text-emerald-300" : "text-slate-400"}`}>
+                          {quest.turnInReady ? "Pronta" : `${completedObjectives}/${totalObjectives}`}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        {quest.objectives.map((objective) => (
+                          <p key={objective.id} className={`text-[11px] leading-snug ${objective.completed ? "text-emerald-200" : "text-slate-300"}`}>
+                            {getQuestObjectiveLabel(objective)} {objective.current}/{objective.required}
+                          </p>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
           </div>
         </div>
       </div>
@@ -3728,103 +4420,294 @@ export const ExplorarPage = () => {
           }
         }}
       >
-        <DialogContent className="max-h-[86vh] overflow-y-auto border-slate-300/20 bg-gradient-to-br from-slate-950/95 via-slate-900/95 to-slate-950/95 sm:max-w-3xl">
+        <DialogContent
+          className={`max-h-[88vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl ${
+            npcShopState?.dialog.actionType === "SHOP_CRAFT" ? "sm:max-w-4xl" : "sm:max-w-3xl"
+          }`}
+        >
           <DialogHeader>
-            <DialogTitle className="text-slate-100">{npcShopState?.dialog.actionType === "SHOP_BUY" ? "Lojinha do NPC" : "Craft do NPC"}</DialogTitle>
-            <DialogDescription className="text-slate-300">Escolha uma opcao abaixo.</DialogDescription>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200/20 bg-slate-900/45">
+                  {npcShopState?.dialog.actionType === "SHOP_BUY" ? (
+                    <ShoppingBag className="h-5 w-5 text-slate-200" />
+                  ) : (
+                    <Wrench className="h-5 w-5 text-slate-200" />
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <DialogTitle className="text-lg text-slate-100">
+                    {npcShopState?.dialog.actionType === "SHOP_BUY" ? "Lojinha do NPC" : "Craft do NPC"}
+                  </DialogTitle>
+                  <DialogDescription className="text-slate-300">
+                    {npcShopState?.dialog.actionType === "SHOP_BUY"
+                      ? "Mercadorias raras e suprimentos dignos de herois."
+                      : "Forje equipamentos com os recursos do seu inventario."}
+                  </DialogDescription>
+                </div>
+              </div>
+              <Badge className="border-slate-200/20 bg-slate-900/45 text-slate-200">
+                {npcShopState?.dialog.actionType === "SHOP_BUY" ? "Lojinha" : "Craft"}
+              </Badge>
+            </div>
           </DialogHeader>
 
           {npcShopState?.dialog.actionType === "SHOP_BUY" ? (
-            <div className="space-y-2">
-              {npcShopState.dialog.buyOffers.length === 0 ? <p className="text-sm text-slate-300">Sem ofertas disponiveis.</p> : null}
-              {npcShopState.dialog.buyOffers.map((offer) => (
-                <div key={offer.id} className="rounded-xl border border-teal-400/25 bg-teal-500/10 p-3 shadow-[0_14px_28px_-20px_rgba(20,184,166,0.85)]">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-100">{offer.itemName ?? offer.itemId}</p>
-                    <Badge className="bg-teal-500/20 text-teal-100 hover:bg-teal-500/20">x{offer.quantity}</Badge>
-                  </div>
-                  {offer.description ? <p className="mt-1 text-xs text-slate-300">{offer.description}</p> : null}
-                  <p className="mt-2 text-xs text-teal-100/90">
-                    Custo: {offer.bitsCost.toLocaleString("pt-BR")} Bits
-                  </p>
-                  <Button
-                    className="mt-3 bg-teal-500 text-slate-950 hover:bg-teal-400"
-                    size="sm"
-                    disabled={shopSubmittingKey === offer.id}
-                    onClick={() => {
-                      setShopSubmittingKey(offer.id);
-                      void buyFromNpc({
-                        npcId: npcShopState.npcId,
-                        dialogId: npcShopState.dialogId,
-                        offerId: offer.id,
-                      })
-                        .then(() => {
-                          setErrorMessage(null);
-                        })
-                        .catch((error) => {
-                          if (error instanceof ApiError) {
-                            setErrorMessage(error.message);
-                          } else {
-                            setErrorMessage("Falha ao comprar item.");
-                          }
-                        })
-                        .finally(() => setShopSubmittingKey(null));
-                    }}
-                  >
-                    {shopSubmittingKey === offer.id ? "Comprando..." : "Comprar"}
-                  </Button>
+            <div className="space-y-3">
+              {npcShopState.dialog.buyOffers.length === 0 ? (
+                <div className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-center text-sm text-slate-400">
+                  Nenhuma oferta disponivel no momento.
                 </div>
-              ))}
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {npcShopState.dialog.buyOffers.map((offer) => {
+                  const sprite = itemCatalog.get(offer.itemId)?.imageData ?? null;
+                  return (
+                    <div key={offer.id} className="group rounded-md border border-slate-200/20 bg-slate-900/45 p-3 transition hover:border-slate-200/30">
+                      <div className="flex items-start gap-3">
+                        {sprite ? (
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-200/20 bg-slate-950/50">
+                            <img src={sprite} alt={offer.itemName ?? offer.itemId} className="h-9 w-9 object-contain" />
+                          </div>
+                        ) : (
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-200/20 bg-slate-950/50 text-xs text-slate-500">
+                            ???
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="truncate text-sm font-semibold text-slate-100">{offer.itemName ?? offer.itemId}</p>
+                            <Badge className="shrink-0 border-slate-200/20 bg-slate-900/45 text-slate-200">x{offer.quantity}</Badge>
+                          </div>
+                          {offer.description ? <p className="text-xs text-slate-300">{offer.description}</p> : null}
+                          <p className="text-xs text-slate-400">Custo: {offer.bitsCost.toLocaleString("pt-BR")} Bits</p>
+                        </div>
+                      </div>
+                      <Button
+                        className="mt-3 w-full border-slate-200/20 bg-slate-900/45 text-slate-200 hover:bg-slate-900/62"
+                        variant="outline"
+                        size="sm"
+                        disabled={shopSubmittingKey === offer.id}
+                        onClick={() => setConfirmShopAction({ type: "buy", offer })}
+                      >
+                        {shopSubmittingKey === offer.id ? "Processando..." : "Comprar"}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ) : null}
 
           {npcShopState?.dialog.actionType === "SHOP_CRAFT" ? (
-            <div className="space-y-2">
-              {npcShopState.dialog.craftRecipes.length === 0 ? <p className="text-sm text-slate-300">Sem receitas disponiveis.</p> : null}
-              {npcShopState.dialog.craftRecipes.map((recipe) => (
-                <div key={recipe.id} className="rounded-xl border border-cyan-400/25 bg-cyan-500/10 p-3 shadow-[0_14px_28px_-20px_rgba(34,211,238,0.9)]">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-100">{recipe.resultItemName ?? recipe.resultItemId}</p>
-                    <Badge className="bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/20">x{recipe.resultQuantity}</Badge>
-                  </div>
-                  {recipe.description ? <p className="mt-1 text-xs text-slate-300">{recipe.description}</p> : null}
-                  <div className="mt-2 space-y-1 text-xs text-cyan-100/90">
-                    {recipe.requirements.map((requirement, index) => (
-                      <p key={`${recipe.id}_${index}`} className="rounded-md bg-slate-950/35 px-2 py-1">
-                        {requirement.itemName ?? requirement.itemId} x{requirement.quantity}
-                      </p>
-                    ))}
-                  </div>
-                  <Button
-                    className="mt-3 bg-cyan-500 text-slate-950 hover:bg-cyan-400"
-                    size="sm"
-                    disabled={shopSubmittingKey === recipe.id}
-                    onClick={() => {
-                      setShopSubmittingKey(recipe.id);
-                      void craftAtNpc({
-                        npcId: npcShopState.npcId,
-                        dialogId: npcShopState.dialogId,
-                        recipeId: recipe.id,
-                      })
-                        .then(() => {
-                          setErrorMessage(null);
-                        })
-                        .catch((error) => {
-                          if (error instanceof ApiError) {
-                            setErrorMessage(error.message);
-                          } else {
-                            setErrorMessage("Falha ao craftar item.");
-                          }
-                        })
-                        .finally(() => setShopSubmittingKey(null));
-                    }}
-                  >
-                    {shopSubmittingKey === recipe.id ? "Craftando..." : "Craftar"}
-                  </Button>
+            <div className="space-y-3">
+              {npcShopState.dialog.craftRecipes.length === 0 ? (
+                <div className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-center text-sm text-slate-400">
+                  Nenhuma receita disponivel no momento.
                 </div>
-              ))}
+              ) : null}
+              {npcShopState.dialog.craftRecipes.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-slate-300">Filtrar receitas</p>
+                    <input
+                      type="text"
+                      value={craftSearch}
+                      onChange={(event) => setCraftSearch(event.target.value)}
+                      placeholder="Buscar por nome ou descricao..."
+                      className="h-8 w-full max-w-xs rounded-md border border-slate-700 bg-slate-950/70 px-2 text-xs text-slate-100 outline-none focus:border-slate-300"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    {npcShopState.dialog.craftRecipes
+                      .filter((recipe) => {
+                        const term = craftSearch.trim().toLowerCase();
+                        if (!term) return true;
+                        const name = (recipe.resultItemName ?? recipe.resultItemId).toLowerCase();
+                        const desc = (recipe.description ?? "").toLowerCase();
+                        return name.includes(term) || desc.includes(term);
+                      })
+                      .map((recipe) => {
+                  const resultSprite = itemCatalog.get(recipe.resultItemId)?.imageData ?? null;
+                  return (
+                    <div
+                      key={recipe.id}
+                      className="flex flex-col gap-3 rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-xs text-slate-200 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <p className="truncate text-sm font-semibold text-slate-100">
+                          {recipe.resultItemName ?? recipe.resultItemId}
+                        </p>
+                        {recipe.description ? <p className="text-xs text-slate-300">{recipe.description}</p> : null}
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {recipe.requirements.map((requirement, index) => {
+                            const requirementSprite = itemCatalog.get(requirement.itemId)?.imageData ?? null;
+                            return (
+                              <div
+                                key={`${recipe.id}_${index}`}
+                                className="inline-flex items-center gap-1 rounded-md border border-slate-200/20 bg-slate-950/60 px-2 py-1"
+                              >
+                                {requirementSprite ? (
+                                  <img
+                                    src={requirementSprite}
+                                    alt={requirement.itemName ?? requirement.itemId}
+                                    className="h-5 w-5 object-contain"
+                                  />
+                                ) : (
+                                  <div className="flex h-5 w-5 items-center justify-center rounded border border-slate-200/20 bg-slate-950 text-[9px] text-slate-500">
+                                    ???
+                                  </div>
+                                )}
+                                <span className="text-[11px]">
+                                  {requirement.itemName ?? requirement.itemId} x{requirement.quantity}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 sm:w-auto sm:flex-col sm:items-end sm:justify-center">
+                        <div className="flex items-center gap-2 rounded-md border border-slate-200/20 bg-slate-950/60 px-3 py-1.5">
+                          {resultSprite ? (
+                            <img
+                              src={resultSprite}
+                              alt={recipe.resultItemName ?? recipe.resultItemId}
+                              className="h-7 w-7 object-contain"
+                            />
+                          ) : (
+                            <div className="flex h-7 w-7 items-center justify-center rounded border border-slate-200/20 bg-slate-950 text-[10px] text-slate-500">
+                              ???
+                            </div>
+                          )}
+                          <span className="text-[11px]">
+                            x{recipe.resultQuantity}
+                          </span>
+                        </div>
+                        <Button
+                          className="w-full border-slate-200/20 bg-slate-900/45 text-slate-200 hover:bg-slate-900/62 sm:w-auto"
+                          variant="outline"
+                          size="sm"
+                          disabled={shopSubmittingKey === recipe.id}
+                          onClick={() => setConfirmShopAction({ type: "craft", recipe })}
+                        >
+                          {shopSubmittingKey === recipe.id ? "Processando..." : "Craftar"}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(confirmShopAction)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmShopAction(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-lg">
+          {confirmShopAction ? (
+            (() => {
+              const isBuy = confirmShopAction.type === "buy";
+              const itemId = isBuy ? confirmShopAction.offer.itemId : confirmShopAction.recipe.resultItemId;
+              const itemName = isBuy
+                ? confirmShopAction.offer.itemName ?? confirmShopAction.offer.itemId
+                : confirmShopAction.recipe.resultItemName ?? confirmShopAction.recipe.resultItemId;
+              const sprite = itemCatalog.get(itemId)?.imageData ?? null;
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle className="text-slate-100">{isBuy ? "Confirmar compra" : "Confirmar craft"}</DialogTitle>
+                    <DialogDescription className="text-slate-300">
+                      {isBuy ? "Confira os detalhes antes de comprar." : "Confira os itens necessarios antes de craftar."}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 rounded-md border border-slate-200/20 bg-slate-900/45 p-3">
+                      {sprite ? (
+                        <img src={sprite} alt={itemName} className="h-12 w-12 object-contain" />
+                      ) : (
+                        <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200/20 bg-slate-950/50 text-xs text-slate-500">
+                          ???
+                        </div>
+                      )}
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold text-slate-100">{itemName}</p>
+                        <p className="text-xs text-slate-400">
+                          {isBuy
+                            ? `Quantidade: ${confirmShopAction.offer.quantity}`
+                            : `Quantidade: ${confirmShopAction.recipe.resultQuantity}`}
+                        </p>
+                        {isBuy ? (
+                          <p className="text-xs text-slate-400">
+                            Custo: {confirmShopAction.offer.bitsCost.toLocaleString("pt-BR")} Bits
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    {!isBuy ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-400">Requisitos</p>
+                        <div className="flex flex-wrap gap-2">
+                          {confirmShopAction.recipe.requirements.map((requirement, index) => {
+                            const requirementSprite = itemCatalog.get(requirement.itemId)?.imageData ?? null;
+                            return (
+                              <div key={`${confirmShopAction.recipe.id}_${index}`} className="flex items-center gap-2 rounded-md border border-slate-200/20 bg-slate-950/50 px-2 py-1.5">
+                                {requirementSprite ? (
+                                  <img src={requirementSprite} alt={requirement.itemName ?? requirement.itemId} className="h-7 w-7 object-contain" />
+                                ) : (
+                                  <div className="flex h-7 w-7 items-center justify-center rounded border border-slate-200/20 bg-slate-950 text-[10px] text-slate-500">
+                                    ???
+                                  </div>
+                                )}
+                                <div className="text-xs text-slate-200">
+                                  {requirement.itemName ?? requirement.itemId} x{requirement.quantity}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <DialogFooter className="gap-2 sm:gap-3">
+                    <Button variant="outline" className="border-slate-200/20 bg-slate-900/45 text-slate-200 hover:bg-slate-900/62" disabled={actionSubmitting} onClick={() => setConfirmShopAction(null)}>
+                      Cancelar
+                    </Button>
+                    <Button disabled={actionSubmitting} onClick={() => void handleConfirmShopAction()}>
+                      {actionSubmitting ? "Confirmando..." : "Confirmar"}
+                    </Button>
+                  </DialogFooter>
+                </>
+              );
+            })()
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(actionResult)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setActionResult(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-slate-100">{actionResult?.title ?? ""}</DialogTitle>
+            <DialogDescription className="text-slate-300">{actionResult?.description ?? ""}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setActionResult(null)}>Ok</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -3836,27 +4719,27 @@ export const ExplorarPage = () => {
           }
         }}
       >
-        <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{questDetail?.title ?? "Quest"}</DialogTitle>
-            <DialogDescription>{questDetail?.description ?? ""}</DialogDescription>
+            <DialogTitle className="text-slate-100">{questDetail?.title ?? "Quest"}</DialogTitle>
+            <DialogDescription className="text-slate-300">{questDetail?.description ?? ""}</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             {questDetail?.objectives.map((objective) => (
-              <div key={objective.id} className="rounded-md border bg-muted/20 p-2 text-xs">
+              <div key={objective.id} className="rounded-md border border-slate-200/20 bg-slate-900/45 p-2 text-xs text-slate-200">
                 <p>{getQuestObjectiveLabel(objective)}</p>
-                <p className="text-muted-foreground">
+                <p className="text-slate-400">
                   Progresso: {objective.current}/{objective.required}
                 </p>
               </div>
             ))}
             {!questDetail ? null : (
-              <div className="rounded-md border bg-muted/20 p-2 text-xs">
+              <div className="rounded-md border border-slate-200/20 bg-slate-900/45 p-2 text-xs text-slate-200">
                 <p>
                   Recompensa: +{questDetail.rewardBits} Bits | +{questDetail.rewardXp} XP
                 </p>
                 {questDetail.rewardItems.length > 0 ? (
-                  <div className="mt-1 space-y-1 text-muted-foreground">
+                  <div className="mt-1 space-y-1 text-slate-400">
                     {questDetail.rewardItems.map((reward) => (
                       <p key={reward.id}>
                         {reward.itemName ?? reward.itemId} x{reward.quantity}
@@ -3867,7 +4750,7 @@ export const ExplorarPage = () => {
               </div>
             )}
             {!questDetail ? null : (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-slate-400">
                 Status: {questDetail.status === "COMPLETED" ? "Concluida" : questDetail.turnInReady ? "Pronta para entrega" : "Em andamento"}
               </p>
             )}

@@ -1,8 +1,13 @@
 import { AdoptedAnima, Anima } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 
+type BaseAnimaWithNextEvolution = Anima & {
+  nextEvolution: Pick<Anima, "id" | "name" | "imageData"> | null;
+  previousEvolutions: Array<Pick<Anima, "id" | "name" | "imageData">>;
+};
+
 export type AdoptedAnimaWithBase = AdoptedAnima & {
-  baseAnima: Anima;
+  baseAnima: BaseAnimaWithNextEvolution;
 };
 
 export type CreateAdoptedAnimaData = {
@@ -19,6 +24,7 @@ export type CreateAdoptedAnimaData = {
   attackSpeedReduction: number;
   critChanceBonus: number;
   isPrimary: boolean;
+  isNextEvolutionUnlocked: boolean;
 };
 
 export interface AdoptionRepository {
@@ -27,11 +33,32 @@ export interface AdoptionRepository {
   create(data: CreateAdoptedAnimaData): Promise<AdoptedAnimaWithBase>;
   clearPrimaryByUserId(userId: string): Promise<void>;
   setPrimary(id: string): Promise<AdoptedAnimaWithBase>;
+  unlockNextEvolution(id: string): Promise<AdoptedAnimaWithBase>;
+  evolveToNext(id: string, nextBaseAnimaId: string, nextCurrentHp: number): Promise<AdoptedAnimaWithBase>;
+  regressToPrevious(id: string, previousBaseAnimaId: string, nextCurrentHp: number): Promise<AdoptedAnimaWithBase>;
 }
 
 const withBaseInclude = {
   include: {
-    baseAnima: true,
+    baseAnima: {
+      include: {
+        nextEvolution: {
+          select: {
+            id: true,
+            name: true,
+            imageData: true,
+          },
+        },
+        previousEvolutions: {
+          select: {
+            id: true,
+            name: true,
+            imageData: true,
+          },
+          take: 1,
+        },
+      },
+    },
   },
 } as const;
 
@@ -77,6 +104,40 @@ export class PrismaAdoptionRepository implements AdoptionRepository {
       where: { id },
       data: {
         isPrimary: true,
+      },
+      ...withBaseInclude,
+    });
+  }
+
+  async unlockNextEvolution(id: string) {
+    return prisma.adoptedAnima.update({
+      where: { id },
+      data: {
+        isNextEvolutionUnlocked: true,
+      },
+      ...withBaseInclude,
+    });
+  }
+
+  async evolveToNext(id: string, nextBaseAnimaId: string, nextCurrentHp: number) {
+    return prisma.adoptedAnima.update({
+      where: { id },
+      data: {
+        baseAnimaId: nextBaseAnimaId,
+        currentHp: nextCurrentHp,
+        isNextEvolutionUnlocked: false,
+      },
+      ...withBaseInclude,
+    });
+  }
+
+  async regressToPrevious(id: string, previousBaseAnimaId: string, nextCurrentHp: number) {
+    return prisma.adoptedAnima.update({
+      where: { id },
+      data: {
+        baseAnimaId: previousBaseAnimaId,
+        currentHp: nextCurrentHp,
+        isNextEvolutionUnlocked: false,
       },
       ...withBaseInclude,
     });

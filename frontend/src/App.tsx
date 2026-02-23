@@ -10,6 +10,7 @@ import { AdminBestiarioPage } from "@/pages/AdminBestiario";
 import { AdminItensPage } from "@/pages/AdminItens";
 import { AdminMapasPage } from "@/pages/AdminMapas";
 import { AdminNpcsPage } from "@/pages/AdminNpcs";
+import { AdminVariaveisGlobaisPage } from "@/pages/AdminVariaveisGlobais";
 import { ExplorarPage } from "@/pages/Explorar";
 import { InventarioPage } from "@/pages/Inventario";
 import { LoginPage } from "@/pages/Login";
@@ -66,6 +67,7 @@ const AppRoutes = () => (
         <Route path="/app/admin/bestiario" element={<AdminBestiarioPage />} />
         <Route path="/app/admin/itens" element={<AdminItensPage />} />
         <Route path="/app/admin/npcs" element={<AdminNpcsPage />} />
+        <Route path="/app/admin/variaveis-globais" element={<AdminVariaveisGlobaisPage />} />
       </Route>
     </Route>
 

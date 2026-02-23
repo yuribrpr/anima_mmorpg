@@ -3,6 +3,7 @@ import { AppError } from "../../lib/errors";
 import type {
   CollectInventoryDropInput,
   UpdateInventoryLayoutInput,
+  UpdateInventoryHotbarInput,
   UseInventoryItemInput,
   UseInventoryItemResult,
   UserInventoryOutput,
@@ -22,6 +23,7 @@ const toOutput = (entity: UserInventoryEntity): UserInventoryOutput => ({
   totalSlots: INVENTORY_TOTAL_SLOTS,
   lockedSlotStart: INVENTORY_LOCKED_SLOT_START,
   layout: entity.layout,
+  hotbar: entity.hotbar,
   items: entity.items.map((entry) => ({
     itemId: entry.itemId,
     quantity: entry.quantity,
@@ -78,6 +80,22 @@ export class InventoryService {
     }
 
     const updated = await this.inventoryRepository.updateLayout(userId, input.layout);
+    return toOutput(updated);
+  }
+
+  async updateHotbar(userId: string, input: UpdateInventoryHotbarInput) {
+    const existing = await this.inventoryRepository.findByUserId(userId);
+    if (!existing) {
+      throw new AppError(404, "INVENTORY_NOT_FOUND", "Inventory not found");
+    }
+
+    const knownItemIds = new Set(existing.items.map((entry) => entry.itemId));
+    const unknownHotbarItem = input.hotbar.find((entry) => entry !== null && !knownItemIds.has(entry));
+    if (unknownHotbarItem) {
+      throw new AppError(400, "INVENTORY_ITEM_NOT_FOUND", "One or more hotbar items are not present in inventory");
+    }
+
+    const updated = await this.inventoryRepository.updateHotbar(userId, input.hotbar);
     return toOutput(updated);
   }
 

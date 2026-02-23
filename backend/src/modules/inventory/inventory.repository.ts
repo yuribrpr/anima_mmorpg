@@ -2,6 +2,7 @@ import { Item, Prisma, UserInventory } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import type { InventoryItemLayout } from "../../types/inventory";
 import { INVENTORY_LOCKED_SLOT_START } from "./inventory.constants";
+const HOTBAR_SLOT_COUNT = 9;
 
 type ItemSummary = Pick<
   Item,
@@ -21,6 +22,7 @@ export type UserInventoryItemEntity = {
 
 export type UserInventoryEntity = Omit<UserInventory, "layout"> & {
   layout: InventoryItemLayout[];
+  hotbar: Array<string | null>;
   items: UserInventoryItemEntity[];
 };
 
@@ -76,6 +78,22 @@ const normalizeLayout = (value: Prisma.JsonValue): InventoryItemLayout[] => {
   return output;
 };
 
+const normalizeHotbar = (value: Prisma.JsonValue): Array<string | null> => {
+  if (!Array.isArray(value)) {
+    return Array.from({ length: HOTBAR_SLOT_COUNT }, () => null as string | null);
+  }
+  const result = Array.from({ length: HOTBAR_SLOT_COUNT }, (_, index) => {
+    const entry = value[index];
+    return typeof entry === "string" ? entry : null;
+  });
+  return result;
+};
+
+const sanitizeHotbarByItems = (hotbar: Array<string | null>, items: { itemId: string }[]) => {
+  const known = new Set(items.map((entry) => entry.itemId));
+  return hotbar.map((itemId) => (itemId && known.has(itemId) ? itemId : null));
+};
+
 const toLayoutFromItems = (items: { itemId: string; slot: number | null }[]): InventoryItemLayout[] =>
   items
     .filter((entry) => entry.slot !== null && entry.slot >= 0 && entry.slot < INVENTORY_LOCKED_SLOT_START)
@@ -88,6 +106,7 @@ const toLayoutFromItems = (items: { itemId: string; slot: number | null }[]): In
 const toEntity = (inventory: UserInventoryWithItems): UserInventoryEntity => ({
   ...inventory,
   layout: inventory.items.length > 0 ? toLayoutFromItems(inventory.items) : normalizeLayout(inventory.layout),
+  hotbar: sanitizeHotbarByItems(normalizeHotbar(inventory.hotbar), inventory.items),
   items: inventory.items.map((entry) => ({
     id: entry.id,
     inventoryId: entry.inventoryId,
@@ -121,6 +140,7 @@ export interface InventoryRepository {
   findByUserId(userId: string): Promise<UserInventoryEntity | null>;
   create(userId: string, bits: number, crystals: number, layout: InventoryItemLayout[]): Promise<UserInventoryEntity>;
   updateLayout(userId: string, layout: InventoryItemLayout[]): Promise<UserInventoryEntity>;
+  updateHotbar(userId: string, hotbar: Array<string | null>): Promise<UserInventoryEntity>;
   findItemById(itemId: string): Promise<ItemSummary | null>;
   addItem(userId: string, itemId: string, quantity: number): Promise<UserInventoryEntity>;
   consumeItem(userId: string, itemId: string, quantity: number): Promise<UserInventoryEntity>;
@@ -142,6 +162,7 @@ export class PrismaInventoryRepository implements InventoryRepository {
         bits,
         crystals,
         layout,
+        hotbar: Array.from({ length: HOTBAR_SLOT_COUNT }, () => null),
       },
       ...inventoryWithItemsArgs,
     });
@@ -185,10 +206,42 @@ export class PrismaInventoryRepository implements InventoryRepository {
       }
 
       const nextLayout = toLayoutFromItems(refreshed.items);
+      const nextHotbar = sanitizeHotbarByItems(normalizeHotbar(refreshed.hotbar), refreshed.items);
       const persisted = await transaction.userInventory.update({
         where: { userId },
         data: {
           layout: nextLayout,
+          hotbar: nextHotbar,
+        },
+        ...inventoryWithItemsArgs,
+      });
+      return persisted;
+    });
+
+    if (!inventory) {
+      throw new Error("INVENTORY_NOT_FOUND");
+    }
+    return toEntity(inventory);
+  }
+
+  async updateHotbar(userId: string, hotbar: Array<string | null>) {
+    const inventory = await prisma.$transaction(async (transaction) => {
+      const existing = await transaction.userInventory.findUnique({
+        where: { userId },
+        ...inventoryWithItemsArgs,
+      });
+      if (!existing) {
+        return null;
+      }
+
+      const sanitized = sanitizeHotbarByItems(
+        hotbar.slice(0, HOTBAR_SLOT_COUNT).concat(Array.from({ length: HOTBAR_SLOT_COUNT }, () => null)).slice(0, HOTBAR_SLOT_COUNT),
+        existing.items,
+      );
+      const persisted = await transaction.userInventory.update({
+        where: { userId },
+        data: {
+          hotbar: sanitized,
         },
         ...inventoryWithItemsArgs,
       });
@@ -247,10 +300,12 @@ export class PrismaInventoryRepository implements InventoryRepository {
       }
 
       const nextLayout = toLayoutFromItems(refreshed.items);
+      const nextHotbar = sanitizeHotbarByItems(normalizeHotbar(refreshed.hotbar), refreshed.items);
       const persisted = await transaction.userInventory.update({
         where: { userId },
         data: {
           layout: nextLayout,
+          hotbar: nextHotbar,
         },
         ...inventoryWithItemsArgs,
       });
@@ -304,10 +359,12 @@ export class PrismaInventoryRepository implements InventoryRepository {
       }
 
       const nextLayout = toLayoutFromItems(refreshed.items);
+      const nextHotbar = sanitizeHotbarByItems(normalizeHotbar(refreshed.hotbar), refreshed.items);
       const persisted = await transaction.userInventory.update({
         where: { userId },
         data: {
           layout: nextLayout,
+          hotbar: nextHotbar,
         },
         ...inventoryWithItemsArgs,
       });

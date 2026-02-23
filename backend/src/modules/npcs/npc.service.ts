@@ -55,6 +55,12 @@ type PlacementNpc = {
 };
 
 const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)));
+const clampMultiplier = (value: number | null | undefined) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(0, Math.min(1_000_000, value));
+};
 
 const normalizeString = (value: unknown, fallback = "") => (typeof value === "string" ? value.trim() : fallback);
 
@@ -532,11 +538,27 @@ export class NpcService {
         bits: INVENTORY_DEFAULT_BITS,
         crystals: INVENTORY_DEFAULT_CRYSTALS,
         layout: [],
+        hotbar: Array.from({ length: 9 }, () => null),
       },
       include: {
         items: true,
       },
     });
+  }
+
+  private async getRewardMultipliersTx(transaction: Prisma.TransactionClient) {
+    const settings = await transaction.globalSettings.findUnique({
+      where: { singletonKey: "global" },
+      select: {
+        expMultiplier: true,
+        bitsMultiplier: true,
+      },
+    });
+
+    return {
+      expMultiplier: clampMultiplier(settings?.expMultiplier),
+      bitsMultiplier: clampMultiplier(settings?.bitsMultiplier),
+    };
   }
 
   private async addItemToInventoryTx(
@@ -959,11 +981,14 @@ export class NpcService {
 
     const questData = (quest.data as { rewardBits?: unknown; rewardXp?: unknown; rewardItems?: unknown } | null | undefined) ?? null;
     const fallbackReward = computeQuestReward(objectives);
-    const rewardBits = clampInt(Number(questData?.rewardBits ?? fallbackReward.bits), 0, 99_999_999);
-    const rewardXp = clampInt(Number(questData?.rewardXp ?? fallbackReward.xp), 0, 99_999_999);
+    const baseRewardBits = clampInt(Number(questData?.rewardBits ?? fallbackReward.bits), 0, 99_999_999);
+    const baseRewardXp = clampInt(Number(questData?.rewardXp ?? fallbackReward.xp), 0, 99_999_999);
     const rewardItems = normalizeRewardItems(questData?.rewardItems);
 
     return prisma.$transaction(async (transaction) => {
+      const multipliers = await this.getRewardMultipliersTx(transaction);
+      const rewardBits = clampInt(baseRewardBits * multipliers.bitsMultiplier, 0, 99_999_999);
+      const rewardXp = clampInt(baseRewardXp * multipliers.expMultiplier, 0, 99_999_999);
       const completedQuest = await transaction.playerQuest.update({
         where: {
           id: quest.id,
@@ -1065,8 +1090,9 @@ export class NpcService {
     }
 
     return prisma.$transaction(async (transaction) => {
-      const bitsGained = Math.max(0, Math.floor(bestiary.bitsDrop));
-      const xpGained = Math.max(0, Math.floor(bestiary.xpDrop));
+      const multipliers = await this.getRewardMultipliersTx(transaction);
+      const bitsGained = clampInt(bestiary.bitsDrop * multipliers.bitsMultiplier, 0, 99_999_999);
+      const xpGained = clampInt(bestiary.xpDrop * multipliers.expMultiplier, 0, 99_999_999);
       const inventoryBits = await this.addBitsTx(transaction, userId, bitsGained);
       const progression = await this.addExperienceToPrimaryTx(transaction, userId, xpGained);
 

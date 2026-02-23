@@ -33,7 +33,10 @@ export type Anima = {
   flipHorizontal: boolean;
   powerLevel: PowerLevel;
   nextEvolutionId: string | null;
+  previousEvolutionId: string | null;
+  nextEvolutionLevelRequired: number;
   nextEvolution: AnimaReference | null;
+  previousEvolution: AnimaReference | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -51,6 +54,8 @@ export type CreateAnimaInput = {
   flipHorizontal: boolean;
   powerLevel: PowerLevel;
   nextEvolutionId: string | null;
+  previousEvolutionId: string | null;
+  nextEvolutionLevelRequired: number;
 };
 
 export type UpdateAnimaInput = CreateAnimaInput;

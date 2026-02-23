@@ -57,7 +57,7 @@ export const apiRequest = async <T>(path: string, init: RequestInit = {}): Promi
     throw new ApiError(
       response.status,
       apiPayload?.error?.code ?? "REQUEST_FAILED",
-      apiPayload?.error?.message ?? "Request failed",
+      apiPayload?.error?.message ?? `Request failed (HTTP ${response.status})`,
       apiPayload?.error?.details,
     );
   }

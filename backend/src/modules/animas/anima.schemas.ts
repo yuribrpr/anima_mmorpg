@@ -15,6 +15,8 @@ export const createAnimaSchema = z.object({
   flipHorizontal: z.boolean().default(true),
   powerLevel: powerLevelSchema,
   nextEvolutionId: z.string().min(1).nullable().optional(),
+  previousEvolutionId: z.string().min(1).nullable().optional(),
+  nextEvolutionLevelRequired: z.number().int().min(1).max(999).default(10),
 });
 
 export const updateAnimaSchema = createAnimaSchema;

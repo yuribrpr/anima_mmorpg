@@ -18,6 +18,15 @@ export const updateInventoryLayout = async (layout: InventoryItemLayout[]) => {
   return response.inventory;
 };
 
+export const updateInventoryHotbar = async (hotbar: Array<string | null>) => {
+  const response = await apiRequest<{ inventory: UserInventory }>("/inventario/hotbar", {
+    method: "PATCH",
+    body: JSON.stringify({ hotbar }),
+  });
+
+  return response.inventory;
+};
+
 export const collectInventoryDrop = async (itemId: string, quantity: number) => {
   const response = await apiRequest<{ inventory: UserInventory }>("/inventario/coletar-drop", {
     method: "POST",

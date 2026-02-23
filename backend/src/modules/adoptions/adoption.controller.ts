@@ -55,4 +55,60 @@ export class AdoptionController {
       next(error);
     }
   };
+
+  unlockNextEvolution = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const params = adoptionParamsSchema.parse(request.params);
+      const anima = await this.adoptionService.unlockNextEvolution(request.authUserId, params.id);
+      response.status(200).json({ unlocked: true, anima });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  evolveToNext = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const params = adoptionParamsSchema.parse(request.params);
+      const anima = await this.adoptionService.evolveToNext(request.authUserId, params.id);
+      response.status(200).json({ evolved: true, anima });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  regressToPrevious = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const params = adoptionParamsSchema.parse(request.params);
+      const anima = await this.adoptionService.regressToPrevious(request.authUserId, params.id);
+      response.status(200).json({ regressed: true, anima });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  getEvolutionChain = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const params = adoptionParamsSchema.parse(request.params);
+      const chain = await this.adoptionService.getEvolutionChain(request.authUserId, params.id);
+      response.status(200).json(chain);
+    } catch (error) {
+      next(error);
+    }
+  };
 }

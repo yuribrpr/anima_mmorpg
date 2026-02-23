@@ -1145,8 +1145,21 @@ export const AdminMapasPage = () => {
           context.lineWidth = isSelected ? 1.6 : 1;
           context.fillRect(left, top, placement.width, placement.height);
           context.strokeRect(left + 0.5, top + 0.5, placement.width - 1, placement.height - 1);
-          if (npcImage?.complete) {
-            context.drawImage(npcImage, left, top, placement.width, placement.height);
+          if (npcImage?.complete && npcImage.naturalWidth > 0 && npcImage.naturalHeight > 0) {
+            const imgRatio = npcImage.naturalWidth / npcImage.naturalHeight;
+            const boxRatio = placement.width / placement.height;
+            let drawWidth: number;
+            let drawHeight: number;
+            if (imgRatio > boxRatio) {
+              drawWidth = placement.width;
+              drawHeight = placement.width / imgRatio;
+            } else {
+              drawHeight = placement.height;
+              drawWidth = placement.height * imgRatio;
+            }
+            const drawX = left + (placement.width - drawWidth) / 2;
+            const drawY = top + (placement.height - drawHeight) / 2;
+            context.drawImage(npcImage, drawX, drawY, drawWidth, drawHeight);
           }
 
           const label = placement.npcName ?? "NPC";
@@ -1961,22 +1974,22 @@ export const AdminMapasPage = () => {
                           min={8}
                           max={2000}
                           value={selectedNpcPlacement.width}
-                          onChange={(event) =>
-                            updateNpcPlacement(selectedNpcPlacement.id, (placement) => ({
-                              ...placement,
-                              width: (() => {
-                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
-                                const nextWidth = clamp(Number(event.target.value) || 96, 8, 2000);
-                                const nextHeight = clamp(nextWidth / Math.max(ratio, 0.001), 8, 2000);
-                                return nextHeight >= 8 ? nextWidth : clamp(8 * ratio, 8, 2000);
-                              })(),
-                              height: (() => {
-                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
-                                const nextWidth = clamp(Number(event.target.value) || 96, 8, 2000);
-                                return clamp(nextWidth / Math.max(ratio, 0.001), 8, 2000);
-                              })(),
-                            }))
-                          }
+                          onChange={(event) => {
+                            const img = npcImageMapRef.current.get(selectedNpcPlacement.id);
+                            const imageRatio =
+                              img?.complete && img.naturalHeight
+                                ? img.naturalWidth / img.naturalHeight
+                                : selectedNpcPlacement.height > 0
+                                  ? selectedNpcPlacement.width / selectedNpcPlacement.height
+                                  : 1;
+                            const nextWidth = clamp(Number(event.target.value) || 96, 8, 2000);
+                            const nextHeight = clamp(nextWidth / imageRatio, 8, 2000);
+                            updateNpcPlacement(selectedNpcPlacement.id, (p) => ({
+                              ...p,
+                              width: nextWidth,
+                              height: nextHeight,
+                            }));
+                          }}
                         />
                       </label>
                       <label className="block text-sm">
@@ -1986,25 +1999,25 @@ export const AdminMapasPage = () => {
                           min={8}
                           max={2000}
                           value={selectedNpcPlacement.height}
-                          onChange={(event) =>
-                            updateNpcPlacement(selectedNpcPlacement.id, (placement) => ({
-                              ...placement,
-                              height: (() => {
-                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
-                                const nextHeight = clamp(Number(event.target.value) || 96, 8, 2000);
-                                const nextWidth = clamp(nextHeight * ratio, 8, 2000);
-                                return nextWidth >= 8 ? nextHeight : clamp(8 / Math.max(ratio, 0.001), 8, 2000);
-                              })(),
-                              width: (() => {
-                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
-                                const nextHeight = clamp(Number(event.target.value) || 96, 8, 2000);
-                                return clamp(nextHeight * ratio, 8, 2000);
-                              })(),
-                            }))
-                          }
+                          onChange={(event) => {
+                            const img = npcImageMapRef.current.get(selectedNpcPlacement.id);
+                            const imageRatio =
+                              img?.complete && img.naturalHeight
+                                ? img.naturalWidth / img.naturalHeight
+                                : selectedNpcPlacement.width > 0
+                                  ? selectedNpcPlacement.width / selectedNpcPlacement.height
+                                  : 1;
+                            const nextHeight = clamp(Number(event.target.value) || 96, 8, 2000);
+                            const nextWidth = clamp(nextHeight * imageRatio, 8, 2000);
+                            updateNpcPlacement(selectedNpcPlacement.id, (p) => ({
+                              ...p,
+                              width: nextWidth,
+                              height: nextHeight,
+                            }));
+                          }}
                         />
                       </label>
-                      <p className="text-xs text-muted-foreground">Dica: no canvas, arraste o sprite para mover. Arraste o quadrado no canto para redimensionar proporcionalmente.</p>
+                      <p className="text-xs text-muted-foreground">Dica: no canvas, arraste o sprite para mover. Arraste o quadrado no canto para redimensionar; a proporção da imagem é mantida.</p>
                     </div>
                   ) : (
                     <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
@@ -2141,13 +2154,23 @@ export const AdminMapasPage = () => {
                       const scaleY = (baseHeight + deltaY) / baseHeight;
                       const dominantScale =
                         Math.abs(scaleX - 1) >= Math.abs(scaleY - 1) ? scaleX : scaleY;
+                      const placement = mapDraft?.npcPlacements.find((p) => p.id === transform.placementId);
+                      const npcImg = placement ? npcImageMapRef.current.get(placement.id) : null;
+                      const imageRatio =
+                        npcImg?.complete && npcImg.naturalHeight
+                          ? npcImg.naturalWidth / npcImg.naturalHeight
+                          : baseHeight > 0
+                            ? baseWidth / baseHeight
+                            : 1;
                       const minScale = Math.max(8 / baseWidth, 8 / baseHeight);
                       const maxScale = Math.min(2000 / baseWidth, 2000 / baseHeight);
                       const nextScale = clamp(dominantScale, minScale, maxScale);
-                      updateNpcPlacement(transform.placementId, (placement) => ({
-                        ...placement,
-                        width: clamp(baseWidth * nextScale, 8, 2000),
-                        height: clamp(baseHeight * nextScale, 8, 2000),
+                      const newWidth = clamp(baseWidth * nextScale, 8, 2000);
+                      const newHeight = clamp(newWidth / imageRatio, 8, 2000);
+                      updateNpcPlacement(transform.placementId, (p) => ({
+                        ...p,
+                        width: newWidth,
+                        height: newHeight,
                       }));
                     }
                     return;

@@ -28,6 +28,8 @@ const animaSchema = z.object({
   flipHorizontal: z.boolean(),
   powerLevel: z.enum(["ROOKIE", "CHAMPION", "ULTIMATE", "MEGA", "BURST_MODE"]),
   nextEvolutionId: z.string().nullable(),
+  previousEvolutionId: z.string().nullable(),
+  nextEvolutionLevelRequired: z.number().int().min(1).max(999),
 });
 
 type AnimaFormValues = z.infer<typeof animaSchema>;
@@ -45,6 +47,8 @@ const defaultFormValues: AnimaFormValues = {
   flipHorizontal: true,
   powerLevel: "ROOKIE",
   nextEvolutionId: null,
+  previousEvolutionId: null,
+  nextEvolutionLevelRequired: 10,
 };
 
 const toPayload = (values: AnimaFormValues): CreateAnimaInput => ({
@@ -60,6 +64,8 @@ const toPayload = (values: AnimaFormValues): CreateAnimaInput => ({
   flipHorizontal: values.flipHorizontal,
   powerLevel: values.powerLevel,
   nextEvolutionId: values.nextEvolutionId,
+  previousEvolutionId: values.previousEvolutionId,
+  nextEvolutionLevelRequired: values.nextEvolutionLevelRequired,
 });
 
 const powerLabel = (value: PowerLevel) => POWER_LEVEL_OPTIONS.find((item) => item.value === value)?.label ?? value;
@@ -88,6 +94,11 @@ const AnimaFormFields = ({
   const selectedNextEvolution = useMemo(
     () => animas.find((anima) => anima.id === selectedNextEvolutionId) ?? null,
     [animas, selectedNextEvolutionId],
+  );
+  const selectedPreviousEvolutionId = form.watch("previousEvolutionId");
+  const selectedPreviousEvolution = useMemo(
+    () => animas.find((anima) => anima.id === selectedPreviousEvolutionId) ?? null,
+    [animas, selectedPreviousEvolutionId],
   );
   const evolutionOptions = useMemo(
     () => animas.filter((anima) => anima.id !== excludeEvolutionId),
@@ -157,12 +168,53 @@ const AnimaFormFields = ({
                     onChange={(event) => field.onChange(event.target.value || null)}
                   >
                     <option value="">Sem evolucao</option>
-                    {evolutionOptions.map((anima) => (
+                    {evolutionOptions
+                      .filter((anima) => anima.id !== selectedPreviousEvolutionId)
+                      .map((anima) => (
                       <option key={anima.id} value={anima.id}>
                         {anima.name}
                       </option>
-                    ))}
+                      ))}
                   </select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="previousEvolutionId"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Evolucao anterior</FormLabel>
+                <FormControl>
+                  <select
+                    className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                    value={field.value ?? ""}
+                    onChange={(event) => field.onChange(event.target.value || null)}
+                  >
+                    <option value="">Sem evolucao anterior</option>
+                    {evolutionOptions
+                      .filter((anima) => anima.id !== selectedNextEvolutionId)
+                      .map((anima) => (
+                        <option key={anima.id} value={anima.id}>
+                          {anima.name}
+                        </option>
+                      ))}
+                  </select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="nextEvolutionLevelRequired"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Nivel minimo para evolucao</FormLabel>
+                <FormControl>
+                  <Input type="number" min={1} max={999} value={field.value} onChange={(event) => field.onChange(Number(event.target.value))} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -329,6 +381,23 @@ const AnimaFormFields = ({
             </div>
           </div>
         ) : null}
+
+        {selectedPreviousEvolution ? (
+          <div className="rounded-lg border bg-muted/20 p-4">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Preview da evolucao anterior</p>
+            <div className="flex items-center gap-3 rounded-md border bg-background/60 p-3">
+              {selectedPreviousEvolution.imageData ? (
+                <img src={selectedPreviousEvolution.imageData} alt={selectedPreviousEvolution.name} className="h-14 w-14 object-contain" />
+              ) : (
+                <div className="h-14 w-14 rounded-md border bg-muted" />
+              )}
+              <div>
+                <p className="text-sm font-semibold">{selectedPreviousEvolution.name}</p>
+                <p className="text-xs text-muted-foreground">{powerLabel(selectedPreviousEvolution.powerLevel)}</p>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -398,6 +467,8 @@ export const AdminAnimasPage = () => {
       flipHorizontal: anima.flipHorizontal ?? true,
       powerLevel: anima.powerLevel,
       nextEvolutionId: anima.nextEvolutionId,
+      previousEvolutionId: anima.previousEvolutionId,
+      nextEvolutionLevelRequired: anima.nextEvolutionLevelRequired,
     });
   };
 
@@ -603,7 +674,9 @@ export const AdminAnimasPage = () => {
                           <Badge variant="secondary">{powerLabel(selectedAnima.powerLevel)}</Badge>
                           <Badge variant="outline">Sprite {selectedAnima.spriteScale.toFixed(1)}x</Badge>
                           <Badge variant="outline">{selectedAnima.flipHorizontal ? "Invertido" : "Normal"}</Badge>
+                          <Badge variant="outline">{selectedAnima.previousEvolution ? `Prev <- ${selectedAnima.previousEvolution.name}` : "Sem regressao"}</Badge>
                           <Badge variant="outline">{selectedAnima.nextEvolution ? `Evolve -> ${selectedAnima.nextEvolution.name}` : "Sem evolucao"}</Badge>
+                          <Badge variant="outline">Nivel evo: {selectedAnima.nextEvolutionLevelRequired}</Badge>
                         </div>
                         <div className="grid gap-2 sm:grid-cols-2">
                           <div className="rounded-md border bg-muted/20 p-2 text-sm">
@@ -713,7 +786,13 @@ export const AdminAnimasPage = () => {
                   <p className="text-[11px] text-muted-foreground">ATK {anima.attack} . DEF {anima.defense} . HP {anima.maxHp}</p>
                   <div className="flex flex-wrap gap-1">
                     <Badge variant="outline" className="text-[10px]">
+                      {anima.previousEvolution ? `Prev: ${anima.previousEvolution.name}` : "Sem prev"}
+                    </Badge>
+                    <Badge variant="outline" className="text-[10px]">
                       {anima.nextEvolution ? `Evo: ${anima.nextEvolution.name}` : "Sem evo"}
+                    </Badge>
+                    <Badge variant="outline" className="text-[10px]">
+                      Lv Evo {anima.nextEvolutionLevelRequired}
                     </Badge>
                     <Badge variant="outline" className="text-[10px]">
                       {anima.flipHorizontal ? "Invertido" : "Normal"}

@@ -136,6 +136,7 @@ model Anima {
   flipHorizontal     Boolean   @default(true)
   powerLevel         PowerLevel
   nextEvolutionId    String?
+  nextEvolutionLevelRequired Int @default(10)
   nextEvolution      Anima?    @relation("AnimaEvolution", fields: [nextEvolutionId], references: [id], onDelete: SetNull)
   previousEvolutions Anima[]   @relation("AnimaEvolution")
   adoptedBy          AdoptedAnima[]
@@ -161,6 +162,7 @@ model AdoptedAnima {
   attackSpeedReduction Float     @default(0)
   critChanceBonus      Float     @default(0)
   isPrimary            Boolean   @default(false)
+  isNextEvolutionUnlocked Boolean @default(false)
   user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   baseAnima            Anima     @relation(fields: [baseAnimaId], references: [id], onDelete: Restrict)
   createdAt            DateTime  @default(now())
@@ -169,6 +171,15 @@ model AdoptedAnima {
   @@index([userId])
   @@index([baseAnimaId])
   @@index([userId, isPrimary])
+}
+
+model GlobalSettings {
+  id            String   @id @default(cuid())
+  singletonKey  String   @unique @default("global")
+  expMultiplier Float    @default(1)
+  bitsMultiplier Float   @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model BestiaryAnima {
@@ -200,6 +211,7 @@ model UserInventory {
   bits      Int      @default(3865)
   crystals  Int      @default(43)
   layout    Json
+  hotbar    Json
   items     UserInventoryItem[]
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())

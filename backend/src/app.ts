@@ -16,6 +16,7 @@ import { createInventoryRouter } from "./modules/inventory/inventory.routes";
 import { InventoryRepository, PrismaInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createItemRouter } from "./modules/items/item.routes";
 import { ItemRepository, PrismaItemRepository } from "./modules/items/item.repository";
+import { createGlobalSettingsRouter } from "./modules/global-settings/global-settings.routes";
 import { createMapRouter } from "./modules/maps/map.routes";
 import { MapRepository, PrismaMapRepository } from "./modules/maps/map.repository";
 import { createNpcRouter } from "./modules/npcs/npc.routes";
@@ -63,6 +64,7 @@ export const createApp = (dependencies: AppDependencies = {}) => {
   app.use("/npcs", createNpcRouter());
   app.use("/inventario", createInventoryRouter(inventoryRepository));
   app.use("/itens", createItemRouter(itemRepository));
+  app.use("/variaveis-globais", createGlobalSettingsRouter());
 
   app.use(notFoundMiddleware);
   app.use(errorMiddleware);

@@ -1,5 +1,5 @@
 import { AppError } from "../../lib/errors";
-import { AdoptAnimaInput, AdoptedAnimaOutput, AdoptionCandidateOutput } from "../../types/adoption";
+import { AdoptAnimaInput, AdoptedAnimaOutput, AdoptionCandidateOutput, AdoptionEvolutionChainOutput, EvolutionChainNodeOutput } from "../../types/adoption";
 import { AnimaRepository, AnimaWithNextEvolution } from "../animas/anima.repository";
 import { AdoptionRepository, AdoptedAnimaWithBase } from "./adoption.repository";
 
@@ -18,6 +18,15 @@ const toCandidateOutput = (anima: AnimaWithNextEvolution): AdoptionCandidateOutp
   agility: anima.agility,
   defense: anima.defense,
   maxHp: anima.maxHp,
+  nextEvolutionLevelRequired: anima.nextEvolutionLevelRequired,
+  nextEvolution: anima.nextEvolution
+    ? {
+        id: anima.nextEvolution.id,
+        name: anima.nextEvolution.name,
+        imageData: anima.nextEvolution.imageData,
+      }
+    : null,
+  previousEvolution: null,
 });
 
 const toAdoptedOutput = (item: AdoptedAnimaWithBase): AdoptedAnimaOutput => {
@@ -40,6 +49,7 @@ const toAdoptedOutput = (item: AdoptedAnimaWithBase): AdoptedAnimaOutput => {
     bonusMaxHp: item.bonusMaxHp,
     attackSpeedReduction: item.attackSpeedReduction,
     critChanceBonus: item.critChanceBonus,
+    isNextEvolutionUnlocked: item.isNextEvolutionUnlocked,
     totalAttack,
     totalDefense,
     totalMaxHp,
@@ -58,6 +68,22 @@ const toAdoptedOutput = (item: AdoptedAnimaWithBase): AdoptedAnimaOutput => {
       agility: item.baseAnima.agility,
       defense: item.baseAnima.defense,
       maxHp: item.baseAnima.maxHp,
+      nextEvolutionLevelRequired: item.baseAnima.nextEvolutionLevelRequired,
+      nextEvolution: item.baseAnima.nextEvolution
+        ? {
+            id: item.baseAnima.nextEvolution.id,
+            name: item.baseAnima.nextEvolution.name,
+            imageData: item.baseAnima.nextEvolution.imageData,
+          }
+        : null,
+      previousEvolution:
+        item.baseAnima.previousEvolutions[0]
+          ? {
+              id: item.baseAnima.previousEvolutions[0].id,
+              name: item.baseAnima.previousEvolutions[0].name,
+              imageData: item.baseAnima.previousEvolutions[0].imageData,
+            }
+          : null,
     },
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
@@ -105,6 +131,7 @@ export class AdoptionService {
       attackSpeedReduction,
       critChanceBonus,
       isPrimary: !hasPrimary,
+      isNextEvolutionUnlocked: false,
     });
 
     return toAdoptedOutput(adopted);
@@ -126,5 +153,147 @@ export class AdoptionService {
     const updated = await this.adoptionRepository.setPrimary(adoptedAnimaId);
 
     return toAdoptedOutput(updated);
+  }
+
+  async unlockNextEvolution(userId: string, adoptedAnimaId: string) {
+    const existing = await this.adoptionRepository.findByIdForUser(adoptedAnimaId, userId);
+    if (!existing) {
+      throw new AppError(404, "ADOPTED_ANIMA_NOT_FOUND", "Adopted anima not found");
+    }
+
+    const nextEvolution = existing.baseAnima.nextEvolution;
+    if (!nextEvolution) {
+      throw new AppError(400, "ANIMA_HAS_NO_NEXT_EVOLUTION", "This anima has no next evolution");
+    }
+    if (existing.isNextEvolutionUnlocked) {
+      return toAdoptedOutput(existing);
+    }
+    if (existing.level < existing.baseAnima.nextEvolutionLevelRequired) {
+      throw new AppError(400, "ANIMA_LEVEL_TOO_LOW_FOR_EVOLUTION", "Level is too low to unlock next evolution");
+    }
+
+    const updated = await this.adoptionRepository.unlockNextEvolution(existing.id);
+    return toAdoptedOutput(updated);
+  }
+
+  async evolveToNext(userId: string, adoptedAnimaId: string) {
+    const existing = await this.adoptionRepository.findByIdForUser(adoptedAnimaId, userId);
+    if (!existing) {
+      throw new AppError(404, "ADOPTED_ANIMA_NOT_FOUND", "Adopted anima not found");
+    }
+
+    const nextEvolution = existing.baseAnima.nextEvolution;
+    if (!nextEvolution) {
+      throw new AppError(400, "ANIMA_HAS_NO_NEXT_EVOLUTION", "This anima has no next evolution");
+    }
+    if (existing.level < existing.baseAnima.nextEvolutionLevelRequired) {
+      throw new AppError(400, "ANIMA_LEVEL_TOO_LOW_FOR_EVOLUTION", "Level is too low to evolve to next evolution");
+    }
+    const nextEvolutionFull = await this.animaRepository.findById(nextEvolution.id);
+    if (!nextEvolutionFull) {
+      throw new AppError(404, "NEXT_EVOLUTION_NOT_FOUND", "Next evolution anima not found");
+    }
+
+    const currentTotalMaxHp = Math.max(1, existing.baseAnima.maxHp + existing.bonusMaxHp);
+    const hpRatio = Math.max(0, Math.min(1, existing.currentHp / currentTotalMaxHp));
+    const nextTotalMaxHp = Math.max(1, nextEvolutionFull.maxHp + existing.bonusMaxHp);
+    const nextCurrentHp = Math.max(1, Math.round(nextTotalMaxHp * hpRatio));
+
+    const updated = await this.adoptionRepository.evolveToNext(existing.id, nextEvolution.id, nextCurrentHp);
+    return toAdoptedOutput(updated);
+  }
+
+  async regressToPrevious(userId: string, adoptedAnimaId: string) {
+    const existing = await this.adoptionRepository.findByIdForUser(adoptedAnimaId, userId);
+    if (!existing) {
+      throw new AppError(404, "ADOPTED_ANIMA_NOT_FOUND", "Adopted anima not found");
+    }
+
+    const previousEvolution = existing.baseAnima.previousEvolutions[0] ?? null;
+    if (!previousEvolution) {
+      throw new AppError(400, "ANIMA_HAS_NO_PREVIOUS_EVOLUTION", "This anima has no previous evolution");
+    }
+
+    const previousEvolutionFull = await this.animaRepository.findById(previousEvolution.id);
+    if (!previousEvolutionFull) {
+      throw new AppError(404, "PREVIOUS_EVOLUTION_NOT_FOUND", "Previous evolution anima not found");
+    }
+
+    const currentTotalMaxHp = Math.max(1, existing.baseAnima.maxHp + existing.bonusMaxHp);
+    const hpRatio = Math.max(0, Math.min(1, existing.currentHp / currentTotalMaxHp));
+    const nextTotalMaxHp = Math.max(1, previousEvolutionFull.maxHp + existing.bonusMaxHp);
+    const nextCurrentHp = Math.max(1, Math.round(nextTotalMaxHp * hpRatio));
+
+    const updated = await this.adoptionRepository.regressToPrevious(existing.id, previousEvolution.id, nextCurrentHp);
+    return toAdoptedOutput(updated);
+  }
+
+  async getEvolutionChain(userId: string, adoptedAnimaId: string): Promise<AdoptionEvolutionChainOutput> {
+    const existing = await this.adoptionRepository.findByIdForUser(adoptedAnimaId, userId);
+    if (!existing) {
+      throw new AppError(404, "ADOPTED_ANIMA_NOT_FOUND", "Adopted anima not found");
+    }
+
+    const currentBase = await this.animaRepository.findById(existing.baseAnima.id);
+    if (!currentBase) {
+      throw new AppError(404, "ANIMA_NOT_FOUND", "Anima not found");
+    }
+
+    const chain: EvolutionChainNodeOutput[] = [
+      {
+        id: currentBase.id,
+        name: currentBase.name,
+        imageData: currentBase.imageData,
+        levelRequiredFromPrevious: null,
+      },
+    ];
+    const visited = new Set<string>([currentBase.id]);
+
+    let cursor = currentBase;
+    while (cursor.previousEvolutionId && !visited.has(cursor.previousEvolutionId)) {
+      const previous = await this.animaRepository.findById(cursor.previousEvolutionId);
+      if (!previous) break;
+      chain.unshift({
+        id: previous.id,
+        name: previous.name,
+        imageData: previous.imageData,
+        levelRequiredFromPrevious: null,
+      });
+      visited.add(previous.id);
+      cursor = previous;
+      if (chain.length >= 12) break;
+    }
+
+    cursor = currentBase;
+    while (cursor.nextEvolutionId && !visited.has(cursor.nextEvolutionId)) {
+      const next = await this.animaRepository.findById(cursor.nextEvolutionId);
+      if (!next) break;
+      chain.push({
+        id: next.id,
+        name: next.name,
+        imageData: next.imageData,
+        levelRequiredFromPrevious: cursor.nextEvolutionLevelRequired,
+      });
+      visited.add(next.id);
+      cursor = next;
+      if (chain.length >= 12) break;
+    }
+
+    for (let index = 1; index < chain.length; index += 1) {
+      const previousNode = chain[index - 1];
+      const currentNode = chain[index];
+      if (!previousNode || !currentNode) continue;
+      const previousFull = await this.animaRepository.findById(previousNode.id);
+      currentNode.levelRequiredFromPrevious = previousFull?.nextEvolutionLevelRequired ?? currentNode.levelRequiredFromPrevious ?? null;
+    }
+
+    const currentIndex = chain.findIndex((node) => node.id === currentBase.id);
+
+    return {
+      adoptedAnimaId: existing.id,
+      currentBaseAnimaId: currentBase.id,
+      currentIndex: currentIndex >= 0 ? currentIndex : 0,
+      chain,
+    };
   }
 }

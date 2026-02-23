@@ -44,6 +44,13 @@ export const updateInventoryLayoutSchema = z
     });
   });
 
+export const updateInventoryHotbarSchema = z.object({
+  hotbar: z
+    .array(z.string().trim().min(1).nullable())
+    .length(9)
+    .transform((entries) => entries.map((entry) => (entry && entry.length > 0 ? entry : null))),
+});
+
 export const collectInventoryDropSchema = z.object({
   itemId: z.string().trim().min(1),
   quantity: z.number().int().min(1).max(9999).default(1),

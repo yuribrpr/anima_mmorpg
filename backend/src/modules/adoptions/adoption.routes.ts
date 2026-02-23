@@ -15,6 +15,10 @@ export const createAdoptionRouter = (adoptionRepository: AdoptionRepository, ani
   router.get("/", controller.listInventory);
   router.post("/", controller.adopt);
   router.patch("/:id/principal", controller.setPrimary);
+  router.patch("/:id/evolucoes/desbloquear", controller.unlockNextEvolution);
+  router.post("/:id/evolucoes/evoluir", controller.evolveToNext);
+  router.post("/:id/evolucoes/regredir", controller.regressToPrevious);
+  router.get("/:id/evolucoes/cadeia", controller.getEvolutionChain);
 
   return router;
 };

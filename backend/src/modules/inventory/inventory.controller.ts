@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { AppError } from "../../lib/errors";
-import { collectInventoryDropSchema, updateInventoryLayoutSchema, useInventoryItemSchema } from "./inventory.schemas";
+import { collectInventoryDropSchema, updateInventoryHotbarSchema, updateInventoryLayoutSchema, useInventoryItemSchema } from "./inventory.schemas";
 import { InventoryService } from "./inventory.service";
 
 export class InventoryController {
@@ -27,6 +27,20 @@ export class InventoryController {
 
       const input = updateInventoryLayoutSchema.parse(request.body);
       const inventory = await this.inventoryService.updateLayout(request.authUserId, input);
+      response.status(200).json({ inventory });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  updateHotbar = async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!request.authUserId) {
+        throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      }
+
+      const input = updateInventoryHotbarSchema.parse(request.body);
+      const inventory = await this.inventoryService.updateHotbar(request.authUserId, input);
       response.status(200).json({ inventory });
     } catch (error) {
       next(error);
