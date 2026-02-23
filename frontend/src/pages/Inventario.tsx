@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Backpack, Coins, Crown, Gem, HeartPulse, Search, Shield, Sparkles, Swords, Timer } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { listAdoptedAnimas, setPrimaryAdoptedAnima } from "@/lib/adocoes";
+import { getUserInventory } from "@/lib/inventario";
 import { cn } from "@/lib/utils";
 import type { AdoptedAnima } from "@/types/adocao";
 import { Badge } from "@/components/ui/badge";
@@ -105,6 +106,7 @@ export const InventarioPage = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isBagOpen, setIsBagOpen] = useState(false);
   const [selectedBagSlot, setSelectedBagSlot] = useState(0);
+  const [wallet, setWallet] = useState({ bits: 0, crystals: 0 });
 
   const bagSlots = useMemo<(BagItem | null)[]>(() => {
     const slots = Array.from({ length: 56 }, () => null as BagItem | null);
@@ -193,19 +195,15 @@ export const InventarioPage = () => {
     ];
   }, [radarMaxima, selected]);
 
-  const bagWallet = useMemo(() => {
-    const levelPoints = animas.reduce((acc, anima) => acc + anima.level * 18, 0);
-    const powerPoints = animas.reduce((acc, anima) => acc + Math.round(estimatePowerScore(anima) / 35), 0);
-    const bits = 1_650 + levelPoints + powerPoints;
-    const crystals = Math.max(12, Math.round(bits / 90));
-    return { bits, crystals };
-  }, [animas]);
-
   const fetchInventory = async () => {
     setLoading(true);
     try {
-      const data = await listAdoptedAnimas();
-      setAnimas(data);
+      const [adopted, inventory] = await Promise.all([listAdoptedAnimas(), getUserInventory()]);
+      setAnimas(adopted);
+      setWallet({
+        bits: inventory.bits,
+        crystals: inventory.crystals,
+      });
       setErrorMessage(null);
     } catch (error) {
       if (error instanceof ApiError) {
@@ -220,6 +218,23 @@ export const InventarioPage = () => {
 
   useEffect(() => {
     void fetchInventory();
+  }, []);
+
+  useEffect(() => {
+    const onInventoryChanged = () => {
+      void getUserInventory()
+        .then((inventory) => {
+          setWallet({
+            bits: inventory.bits,
+            crystals: inventory.crystals,
+          });
+        })
+        .catch(() => {
+          // Keep previous wallet values if refresh fails.
+        });
+    };
+    window.addEventListener("inventory:changed", onInventoryChanged as EventListener);
+    return () => window.removeEventListener("inventory:changed", onInventoryChanged as EventListener);
   }, []);
 
   useEffect(() => {
@@ -292,9 +307,9 @@ export const InventarioPage = () => {
     <section className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="space-y-2">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Inventario de Animas</p>
+          <p className="text-xs uppercase tracking-wide text-slate-400">Inventario de Animas</p>
           <h1 className="text-3xl font-semibold tracking-tight">Seus companheiros</h1>
-          <p className="text-sm text-muted-foreground">Visualizacao rapida dos stats e acao direta para trocar o principal.</p>
+          <p className="text-sm text-slate-400">Visualizacao rapida dos stats e acao direta para trocar o principal.</p>
         </div>
         <Button variant="outline" onClick={() => void fetchInventory()} disabled={loading}>
           {loading ? "Atualizando..." : "Atualizar inventario"}
@@ -304,28 +319,28 @@ export const InventarioPage = () => {
       {errorMessage ? <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{errorMessage}</div> : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <Card className="bg-card/70">
+        <Card className="border-slate-200/20 bg-gradient-to-br from-slate-950/94 via-slate-900/92 to-slate-950/94 backdrop-blur-xl">
           <CardHeader className="pb-2">
-            <CardDescription>Total</CardDescription>
+            <CardDescription className="text-slate-400">Total</CardDescription>
             <CardTitle className="text-2xl">{animas.length}</CardTitle>
           </CardHeader>
         </Card>
-        <Card className="bg-card/70">
+        <Card className="border-slate-200/20 bg-gradient-to-br from-slate-950/94 via-slate-900/92 to-slate-950/94 backdrop-blur-xl">
           <CardHeader className="pb-2">
-            <CardDescription>Media de nivel</CardDescription>
+            <CardDescription className="text-slate-400">Media de nivel</CardDescription>
             <CardTitle className="text-2xl">{averageLevel}</CardTitle>
           </CardHeader>
         </Card>
-        <Card className="bg-card/70">
+        <Card className="border-slate-200/20 bg-gradient-to-br from-slate-950/94 via-slate-900/92 to-slate-950/94 backdrop-blur-xl">
           <CardHeader className="pb-2">
-            <CardDescription>Anima principal</CardDescription>
+            <CardDescription className="text-slate-400">Anima principal</CardDescription>
             <CardTitle className="truncate text-xl">{primary?.nickname ?? "Nao definido"}</CardTitle>
           </CardHeader>
         </Card>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-        <Card>
+        <Card className="border-slate-200/20 bg-gradient-to-br from-slate-950/94 via-slate-900/92 to-slate-950/94 backdrop-blur-xl">
           <CardHeader className="space-y-4 pb-4">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -421,7 +436,7 @@ export const InventarioPage = () => {
           </CardContent>
         </Card>
 
-        <Card className="xl:sticky xl:top-6 xl:max-h-[calc(100vh-4rem)] xl:overflow-auto">
+        <Card className="border-slate-200/20 bg-gradient-to-br from-slate-950/94 via-slate-900/92 to-slate-950/94 backdrop-blur-xl xl:sticky xl:top-6 xl:max-h-[calc(100vh-4rem)] xl:overflow-auto">
           <CardHeader className="space-y-2">
             <CardTitle className="text-xl">Detalhes</CardTitle>
             <CardDescription>Painel completo do Anima selecionado.</CardDescription>
@@ -572,10 +587,10 @@ export const InventarioPage = () => {
       </div>
 
       <Dialog open={isBagOpen} onOpenChange={setIsBagOpen}>
-        <DialogContent className="max-w-[min(96vw,980px)] overflow-hidden border-border bg-card p-0">
-          <DialogHeader className="border-b border-border px-5 py-4">
+        <DialogContent className="max-w-[min(96vw,980px)] overflow-hidden border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 p-0 text-slate-100 backdrop-blur-xl">
+          <DialogHeader className="border-b border-slate-200/15 px-5 py-4">
             <DialogTitle className="text-lg">Bag</DialogTitle>
-            <DialogDescription>Itens de uso rapido, materiais e saldo atual.</DialogDescription>
+            <DialogDescription className="text-slate-300">Itens de uso rapido, materiais e saldo atual.</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-0 md:grid-cols-[1fr_290px]">
@@ -615,27 +630,27 @@ export const InventarioPage = () => {
             </div>
 
             <aside className="space-y-3 border-t border-border bg-muted/20 p-4 md:border-l md:border-t-0">
-              <div className="rounded-lg border border-border bg-card/70 p-3">
-                <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Dinheiro</p>
+              <div className="rounded-lg border border-slate-200/15 bg-slate-900/45 p-3">
+                <p className="mb-2 text-xs uppercase tracking-wide text-slate-400">Dinheiro</p>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center justify-between">
-                    <span className="inline-flex items-center gap-2 text-muted-foreground">
+                    <span className="inline-flex items-center gap-2 text-slate-400">
                       <Coins className="h-4 w-4 text-amber-400" />
                       Bits
                     </span>
-                    <strong>{bagWallet.bits.toLocaleString("pt-BR")}</strong>
+                    <strong>{wallet.bits.toLocaleString("pt-BR")}</strong>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="inline-flex items-center gap-2 text-muted-foreground">
+                    <span className="inline-flex items-center gap-2 text-slate-400">
                       <Gem className="h-4 w-4 text-cyan-400" />
                       Cristais
                     </span>
-                    <strong>{bagWallet.crystals.toLocaleString("pt-BR")}</strong>
+                    <strong>{wallet.crystals.toLocaleString("pt-BR")}</strong>
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-lg border border-border bg-card/70 p-3">
+              <div className="rounded-lg border border-slate-200/15 bg-slate-900/45 p-3">
                 {selectedBagItem ? (
                   <div className="space-y-3">
                     <div className="flex items-start gap-3">
@@ -649,10 +664,10 @@ export const InventarioPage = () => {
                       </div>
                       <div>
                         <p className="text-sm font-medium">{selectedBagItem.name}</p>
-                        <p className="text-xs text-muted-foreground">{selectedBagItem.category}</p>
+                        <p className="text-xs text-slate-400">{selectedBagItem.category}</p>
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground">{selectedBagItem.description}</p>
+                    <p className="text-xs text-slate-300">{selectedBagItem.description}</p>
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5">
                         Qtd: <strong>{selectedBagItem.quantity}</strong>
@@ -663,7 +678,7 @@ export const InventarioPage = () => {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">Selecione um slot com item para ver os detalhes.</p>
+                  <p className="text-sm text-slate-400">Selecione um slot com item para ver os detalhes.</p>
                 )}
               </div>
             </aside>

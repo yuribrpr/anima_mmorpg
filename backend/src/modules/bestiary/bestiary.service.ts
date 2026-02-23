@@ -51,8 +51,10 @@ export class BestiaryAnimaService {
 
   private prepareCreateOrUpdateData(input: CreateBestiaryAnimaInput) {
     const totalPower = input.attack + input.defense;
-    const bitsDrop = Math.round(totalPower * 0.1);
-    const xpDrop = Math.round(totalPower * 0.15);
+    const defaultBitsDrop = Math.round(totalPower * 0.05);
+    const defaultXpDrop = Math.round(totalPower * 0.15);
+    const bitsDrop = Math.max(0, Math.floor(input.bitsDrop ?? defaultBitsDrop));
+    const xpDrop = Math.max(0, Math.floor(input.xpDrop ?? defaultXpDrop));
 
     return {
       name: input.name,

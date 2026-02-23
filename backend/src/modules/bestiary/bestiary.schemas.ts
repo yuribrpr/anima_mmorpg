@@ -19,6 +19,8 @@ export const createBestiaryAnimaSchema = z.object({
   spriteScale: z.number().positive().default(3),
   flipHorizontal: z.boolean().default(true),
   powerLevel: powerLevelSchema,
+  bitsDrop: z.number().int().min(0).max(999999999).optional(),
+  xpDrop: z.number().int().min(0).max(999999999).optional(),
   drops: z.array(dropSchema).max(30).optional().default([]),
 });
 

@@ -3,15 +3,17 @@ import { Brush, Eraser, Hand, MapPinned, Minus, Pencil, Plus, Target, Trash2, Up
 import { ApiError } from "@/lib/api";
 import { listBestiaryAnimas } from "@/lib/bestiario";
 import { activateMap, createMap, deleteMap, getMapById, listMaps, renameMap, saveMapAssets, saveMapLayout } from "@/lib/mapas";
+import { listNpcs } from "@/lib/npcs";
 import { GRID_COLS, GRID_ROWS, RENDER_BASE_HEIGHT, TILE_SIZE, WORLD_HEIGHT, WORLD_WIDTH } from "@/lib/map-grid";
 import type { GameMap } from "@/types/mapa";
 import type { BestiaryAnima } from "@/types/bestiary-anima";
+import type { NpcDefinition } from "@/types/npc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-type EditorTab = "mapa_base" | "colisoes" | "inimigos" | "portais";
+type EditorTab = "mapa_base" | "colisoes" | "inimigos" | "portais" | "npcs";
 type EditorTool = "navigate" | "add" | "erase";
 type EnemyAreaMode = "spawn" | "movement";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -36,6 +38,10 @@ const generatePortalId = () =>
   typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `portal_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+const generateNpcPlacementId = () =>
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `npc_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 
 const getEnemyColor = (seed: string) => {
   let hash = 0;
@@ -55,11 +61,13 @@ const normalizeMap = (map: GameMap): GameMap => ({
   ...map,
   enemySpawns: map.enemySpawns ?? [],
   portals: (map as { portals?: GameMap["portals"] }).portals ?? [],
+  npcPlacements: map.npcPlacements ?? [],
 });
 
 export const AdminMapasPage = () => {
   const [maps, setMaps] = useState<GameMap[]>([]);
   const [bestiaryAnimas, setBestiaryAnimas] = useState<BestiaryAnima[]>([]);
+  const [npcDefinitions, setNpcDefinitions] = useState<NpcDefinition[]>([]);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
   const [mapDraft, setMapDraft] = useState<GameMap | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,6 +84,8 @@ export const AdminMapasPage = () => {
   const [enemyAreaMode, setEnemyAreaMode] = useState<EnemyAreaMode>("spawn");
   const [selectedPortalId, setSelectedPortalId] = useState<string | null>(null);
   const [newPortalTargetMapId, setNewPortalTargetMapId] = useState<string>("");
+  const [selectedNpcPlacementId, setSelectedNpcPlacementId] = useState<string | null>(null);
+  const [newNpcId, setNewNpcId] = useState<string>("");
   const [renameMapName, setRenameMapName] = useState("");
   const [renamingMap, setRenamingMap] = useState(false);
   const [deletingMap, setDeletingMap] = useState(false);
@@ -94,6 +104,21 @@ export const AdminMapasPage = () => {
   const paintRef = useRef(false);
   const lastPaintedTileKeyRef = useRef<string | null>(null);
   const hoverTileRef = useRef<{ x: number; y: number } | null>(null);
+  const npcImageMapRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const npcTransformRef = useRef<
+    | {
+        active: true;
+        mode: "move" | "resize";
+        placementId: string;
+        startWorldX: number;
+        startWorldY: number;
+        startTileX: number;
+        startTileY: number;
+        startWidth: number;
+        startHeight: number;
+      }
+    | { active: false }
+  >({ active: false });
   const backgroundImageRef = useRef<HTMLImageElement | null>(null);
   const editorSurfaceRef = useRef<HTMLDivElement | null>(null);
   const spacePressedRef = useRef(false);
@@ -133,11 +158,22 @@ export const AdminMapasPage = () => {
     const load = async () => {
       setLoading(true);
       try {
-        const [, bestiary] = await Promise.all([refreshMaps(), listBestiaryAnimas()]);
+        const [mapsResult, bestiaryResult, npcsResult] = await Promise.allSettled([refreshMaps(), listBestiaryAnimas(), listNpcs()]);
+        if (mapsResult.status === "rejected") {
+          throw mapsResult.reason;
+        }
         if (!mounted) return;
+        const bestiary = bestiaryResult.status === "fulfilled" ? bestiaryResult.value : [];
+        const npcs = npcsResult.status === "fulfilled" ? npcsResult.value : [];
         setBestiaryAnimas(bestiary);
+        setNpcDefinitions(npcs);
         setNewEnemyBestiaryId((current) => current || bestiary[0]?.id || "");
-        setErrorMessage(null);
+        setNewNpcId((current) => current || npcs[0]?.id || "");
+        if (bestiaryResult.status === "rejected" || npcsResult.status === "rejected") {
+          setErrorMessage("Alguns dados auxiliares nao carregaram. O editor segue disponivel.");
+        } else {
+          setErrorMessage(null);
+        }
       } catch (error) {
         if (!mounted) return;
         if (error instanceof ApiError) {
@@ -178,6 +214,12 @@ export const AdminMapasPage = () => {
             return current;
           }
           return normalizedMap.portals[0]?.id ?? null;
+        });
+        setSelectedNpcPlacementId((current) => {
+          if (current && normalizedMap.npcPlacements.some((item) => item.id === current)) {
+            return current;
+          }
+          return normalizedMap.npcPlacements[0]?.id ?? null;
         });
         setNewPortalTargetMapId((current) => {
           if (current) {
@@ -231,6 +273,10 @@ export const AdminMapasPage = () => {
   }, [mapDraft?.id, mapDraft?.name]);
 
   useEffect(() => {
+    npcImageMapRef.current = new Map();
+  }, [mapDraft?.id]);
+
+  useEffect(() => {
     if (!mapDraft || bestiaryAnimas.length === 0 || mapDraft.enemySpawns.length === 0) {
       return;
     }
@@ -270,6 +316,37 @@ export const AdminMapasPage = () => {
 
     setMapDraft((current) => (current ? { ...current, enemySpawns: hydrated } : current));
   }, [bestiaryAnimas, mapDraft]);
+
+  useEffect(() => {
+    if (!mapDraft || npcDefinitions.length === 0 || mapDraft.npcPlacements.length === 0) {
+      return;
+    }
+
+    const npcMap = new Map(npcDefinitions.map((item) => [item.id, item]));
+    let changed = false;
+    const hydratedPlacements = mapDraft.npcPlacements.map((placement) => {
+      const npc = npcMap.get(placement.npcId);
+      if (!npc) {
+        return placement;
+      }
+
+      const next = {
+        ...placement,
+        npcName: npc.name ?? placement.npcName ?? null,
+        imageData: npc.imageData ?? placement.imageData ?? null,
+      };
+      if (next.npcName !== placement.npcName || next.imageData !== placement.imageData) {
+        changed = true;
+      }
+      return next;
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    setMapDraft((current) => (current ? { ...current, npcPlacements: hydratedPlacements } : current));
+  }, [mapDraft, npcDefinitions]);
 
   const flushAutosave = useCallback(async () => {
     if (saveInFlightRef.current) {
@@ -323,11 +400,22 @@ export const AdminMapasPage = () => {
           targetSpawnY: portal.targetSpawnY,
           area: portal.area,
         }));
+        const compactNpcPlacements = snapshot.npcPlacements.map((placement) => ({
+          id: placement.id,
+          npcId: placement.npcId,
+          npcName: placement.npcName ?? null,
+          imageData: placement.imageData ?? null,
+          tileX: placement.tileX,
+          tileY: placement.tileY,
+          width: placement.width,
+          height: placement.height,
+        }));
         await saveMapLayout(snapshot.id, {
           tileLayer: snapshot.tileLayer,
           collisionLayer: snapshot.collisionLayer,
           enemySpawns: compactEnemySpawns,
           portals: compactPortals,
+          npcPlacements: compactNpcPlacements,
           spawnX: snapshot.spawnX,
           spawnY: snapshot.spawnY,
           backgroundScale: snapshot.backgroundScale,
@@ -481,6 +569,11 @@ export const AdminMapasPage = () => {
     [mapDraft?.portals, selectedPortalId],
   );
 
+  const selectedNpcPlacement = useMemo(
+    () => mapDraft?.npcPlacements.find((item) => item.id === selectedNpcPlacementId) ?? null,
+    [mapDraft?.npcPlacements, selectedNpcPlacementId],
+  );
+
   const availablePortalTargets = useMemo(
     () => maps.filter((item) => item.id !== mapDraft?.id),
     [mapDraft?.id, maps],
@@ -499,6 +592,20 @@ export const AdminMapasPage = () => {
       return availablePortalTargets[0]?.id ?? "";
     });
   }, [availablePortalTargets]);
+
+  useEffect(() => {
+    if (npcDefinitions.length === 0) {
+      setNewNpcId("");
+      return;
+    }
+
+    setNewNpcId((current) => {
+      if (current && npcDefinitions.some((item) => item.id === current)) {
+        return current;
+      }
+      return npcDefinitions[0]?.id ?? "";
+    });
+  }, [npcDefinitions]);
 
   const handleAddEnemySpawn = () => {
     if (!mapDraft || !newEnemyBestiaryId) {
@@ -615,6 +722,59 @@ export const AdminMapasPage = () => {
     );
   };
 
+  const handleAddNpcPlacement = (tileX: number, tileY: number) => {
+    if (!mapDraft || !newNpcId) {
+      return;
+    }
+
+    const npc = npcDefinitions.find((item) => item.id === newNpcId) ?? null;
+    if (!npc) {
+      return;
+    }
+
+    const nextPlacement = {
+      id: generateNpcPlacementId(),
+      npcId: npc.id,
+      npcName: npc.name,
+      imageData: npc.imageData,
+      tileX: clamp(tileX, 0, GRID_COLS - 1),
+      tileY: clamp(tileY, 0, GRID_ROWS - 1),
+      width: 96,
+      height: 96,
+    };
+
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        npcPlacements: [...current.npcPlacements, nextPlacement],
+      }),
+      true,
+    );
+    setSelectedNpcPlacementId(nextPlacement.id);
+  };
+
+  const updateNpcPlacement = (id: string, updater: (placement: NonNullable<typeof selectedNpcPlacement>) => NonNullable<typeof selectedNpcPlacement>) => {
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        npcPlacements: current.npcPlacements.map((item) => (item.id === id ? updater(item) : item)),
+      }),
+      true,
+    );
+  };
+
+  const handleRemoveNpcPlacement = (id: string) => {
+    const remaining = (mapDraft?.npcPlacements ?? []).filter((item) => item.id !== id);
+    updateMapDraft(
+      (current) => ({
+        ...current,
+        npcPlacements: current.npcPlacements.filter((item) => item.id !== id),
+      }),
+      true,
+    );
+    setSelectedNpcPlacementId((current) => (current === id ? remaining[0]?.id ?? null : current));
+  };
+
   const worldTileFromPointer = (event: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current;
     if (!canvas || !mapDraft) return null;
@@ -627,6 +787,34 @@ export const AdminMapasPage = () => {
     const y = Math.floor(worldY / TILE_SIZE);
     if (x < 0 || x >= mapDraft.cols || y < 0 || y >= mapDraft.rows) return null;
     return { x, y };
+  };
+
+  const worldPointFromPointer = (event: { clientX: number; clientY: number }) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const screenX = event.clientX - rect.left;
+    const screenY = event.clientY - rect.top;
+    return {
+      x: (screenX - panRef.current.x) / zoomRef.current,
+      y: (screenY - panRef.current.y) / zoomRef.current,
+    };
+  };
+
+  const findNpcPlacementAtWorldPoint = (worldX: number, worldY: number) => {
+    const placements = [...(mapDraft?.npcPlacements ?? [])].sort((left, right) => left.tileY - right.tileY);
+    for (const placement of placements) {
+      const baseX = placement.tileX * TILE_SIZE + TILE_SIZE / 2;
+      const baseY = placement.tileY * TILE_SIZE + TILE_SIZE;
+      const left = baseX - placement.width / 2;
+      const right = baseX + placement.width / 2;
+      const top = baseY - placement.height;
+      const bottom = baseY;
+      if (worldX >= left && worldX <= right && worldY >= top && worldY <= bottom) {
+        return placement;
+      }
+    }
+    return null;
   };
 
   const applyBrush = (center: { x: number; y: number }) => {
@@ -772,6 +960,19 @@ export const AdminMapasPage = () => {
           area: nextArea,
         };
       });
+      return;
+    }
+
+    if (tab === "npcs") {
+      if (tool === "add") {
+        handleAddNpcPlacement(center.x, center.y);
+        return;
+      }
+
+      const target = (mapDraft.npcPlacements ?? []).find((placement) => placement.tileX === center.x && placement.tileY === center.y);
+      if (target) {
+        handleRemoveNpcPlacement(target.id);
+      }
     }
   };
 
@@ -917,6 +1118,54 @@ export const AdminMapasPage = () => {
         }
       }
 
+      if (tab === "npcs") {
+        for (const placement of map.npcPlacements) {
+          const isSelected = placement.id === selectedNpcPlacementId;
+          const baseX = placement.tileX * TILE_SIZE + TILE_SIZE / 2;
+          const baseY = placement.tileY * TILE_SIZE + TILE_SIZE;
+          const left = baseX - placement.width / 2;
+          const top = baseY - placement.height;
+
+          let npcImage: HTMLImageElement | null = null;
+          if (placement.imageData) {
+            const cached = npcImageMapRef.current.get(placement.id);
+            if (!cached || cached.src !== placement.imageData) {
+              const image = new Image();
+              image.src = placement.imageData;
+              npcImageMapRef.current.set(placement.id, image);
+              npcImage = image;
+            } else {
+              npcImage = cached;
+            }
+          }
+
+          context.save();
+          context.fillStyle = isSelected ? "rgba(59, 130, 246, 0.16)" : "rgba(15, 23, 42, 0.3)";
+          context.strokeStyle = isSelected ? "rgba(96, 165, 250, 0.9)" : "rgba(148, 163, 184, 0.55)";
+          context.lineWidth = isSelected ? 1.6 : 1;
+          context.fillRect(left, top, placement.width, placement.height);
+          context.strokeRect(left + 0.5, top + 0.5, placement.width - 1, placement.height - 1);
+          if (npcImage?.complete) {
+            context.drawImage(npcImage, left, top, placement.width, placement.height);
+          }
+
+          const label = placement.npcName ?? "NPC";
+          context.fillStyle = "rgba(2, 6, 23, 0.8)";
+          context.fillRect(left, top - 16, Math.max(58, label.length * 7.2), 14);
+          context.fillStyle = "rgba(248, 250, 252, 0.95)";
+          context.font = "600 10px Geist, sans-serif";
+          context.textAlign = "left";
+          context.textBaseline = "middle";
+          context.fillText(label, left + 4, top - 9);
+
+          if (isSelected) {
+            context.fillStyle = "rgba(56, 189, 248, 0.95)";
+            context.fillRect(left + placement.width - 7, top + placement.height - 7, 10, 10);
+          }
+          context.restore();
+        }
+      }
+
       context.strokeStyle = "rgba(255,255,255,0.15)";
       context.lineWidth = 1;
       for (let x = 0; x <= GRID_COLS; x += 1) {
@@ -983,6 +1232,11 @@ export const AdminMapasPage = () => {
         }
       }
 
+      if (tab === "npcs" && hoverTileRef.current && tool !== "navigate") {
+        context.fillStyle = tool === "add" ? "rgba(56, 189, 248, 0.3)" : "rgba(239, 68, 68, 0.25)";
+        context.fillRect(hoverTileRef.current.x * TILE_SIZE, hoverTileRef.current.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      }
+
       context.restore();
       frame = requestAnimationFrame(draw);
     };
@@ -991,7 +1245,7 @@ export const AdminMapasPage = () => {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [brushSize, enemyAreaMode, mapDraft, selectedEnemySpawnId, selectedPortalId, tab, tool]);
+  }, [brushSize, enemyAreaMode, mapDraft, selectedEnemySpawnId, selectedNpcPlacementId, selectedPortalId, tab, tool]);
 
   const handleCreateMap = async () => {
     if (newMapName.trim().length < 2) return;
@@ -1207,6 +1461,9 @@ export const AdminMapasPage = () => {
             <Button variant={tab === "portais" ? "default" : "outline"} onClick={() => setTab("portais")}>
               Portais
             </Button>
+            <Button variant={tab === "npcs" ? "default" : "outline"} onClick={() => setTab("npcs")}>
+              NPCs
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1271,6 +1528,21 @@ export const AdminMapasPage = () => {
                 <Eraser className="h-4 w-4" /> 3 Apagar portal
               </Button>
               <Badge variant="secondary">ESC volta para navegar</Badge>
+            </div>
+          ) : null}
+
+          {tab === "npcs" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant={tool === "navigate" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("navigate")}>
+                <Hand className="h-4 w-4" /> 1 Navegar
+              </Button>
+              <Button variant={tool === "add" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("add")}>
+                <Brush className="h-4 w-4" /> 2 Posicionar NPC
+              </Button>
+              <Button variant={tool === "erase" ? "default" : "outline"} size="sm" className="gap-2" onClick={() => setTool("erase")}>
+                <Eraser className="h-4 w-4" /> 3 Remover NPC
+              </Button>
+              <Badge variant="secondary">Arraste o sprite para mover e o canto para redimensionar</Badge>
             </div>
           ) : null}
 
@@ -1630,6 +1902,118 @@ export const AdminMapasPage = () => {
                 </div>
               ) : null}
 
+              {tab === "npcs" ? (
+                <div className="space-y-4">
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <p className="text-sm font-medium">Adicionar NPC</p>
+                    <select
+                      className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                      value={newNpcId}
+                      onChange={(event) => setNewNpcId(event.target.value)}
+                    >
+                      <option value="">Selecione NPC</option>
+                      {npcDefinitions.map((npc) => (
+                        <option key={npc.id} value={npc.id}>
+                          {npc.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button className="w-full" onClick={() => hoverTileRef.current && handleAddNpcPlacement(hoverTileRef.current.x, hoverTileRef.current.y)} disabled={!newNpcId}>
+                      Adicionar no tile atual
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <p className="text-sm font-medium">NPCs no mapa</p>
+                    <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+                      {mapDraft?.npcPlacements.length ? (
+                        mapDraft.npcPlacements.map((placement) => (
+                          <div
+                            key={placement.id}
+                            className={`rounded-md border p-2 ${selectedNpcPlacementId === placement.id ? "border-primary bg-primary/10" : "border-border"}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <button type="button" className="text-left text-sm font-medium" onClick={() => setSelectedNpcPlacementId(placement.id)}>
+                                {placement.npcName ?? "NPC"}
+                              </button>
+                              <Button type="button" variant="ghost" size="sm" onClick={() => handleRemoveNpcPlacement(placement.id)}>
+                                Remover
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Tile ({placement.tileX}, {placement.tileY}) | {Math.round(placement.width)}x{Math.round(placement.height)}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Nenhum NPC posicionado.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedNpcPlacement ? (
+                    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+                      <p className="text-sm font-medium">Configuracao do NPC selecionado</p>
+                      <label className="block text-sm">
+                        Largura
+                        <Input
+                          type="number"
+                          min={8}
+                          max={2000}
+                          value={selectedNpcPlacement.width}
+                          onChange={(event) =>
+                            updateNpcPlacement(selectedNpcPlacement.id, (placement) => ({
+                              ...placement,
+                              width: (() => {
+                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
+                                const nextWidth = clamp(Number(event.target.value) || 96, 8, 2000);
+                                const nextHeight = clamp(nextWidth / Math.max(ratio, 0.001), 8, 2000);
+                                return nextHeight >= 8 ? nextWidth : clamp(8 * ratio, 8, 2000);
+                              })(),
+                              height: (() => {
+                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
+                                const nextWidth = clamp(Number(event.target.value) || 96, 8, 2000);
+                                return clamp(nextWidth / Math.max(ratio, 0.001), 8, 2000);
+                              })(),
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block text-sm">
+                        Altura
+                        <Input
+                          type="number"
+                          min={8}
+                          max={2000}
+                          value={selectedNpcPlacement.height}
+                          onChange={(event) =>
+                            updateNpcPlacement(selectedNpcPlacement.id, (placement) => ({
+                              ...placement,
+                              height: (() => {
+                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
+                                const nextHeight = clamp(Number(event.target.value) || 96, 8, 2000);
+                                const nextWidth = clamp(nextHeight * ratio, 8, 2000);
+                                return nextWidth >= 8 ? nextHeight : clamp(8 / Math.max(ratio, 0.001), 8, 2000);
+                              })(),
+                              width: (() => {
+                                const ratio = placement.height > 0 ? placement.width / placement.height : 1;
+                                const nextHeight = clamp(Number(event.target.value) || 96, 8, 2000);
+                                return clamp(nextHeight * ratio, 8, 2000);
+                              })(),
+                            }))
+                          }
+                        />
+                      </label>
+                      <p className="text-xs text-muted-foreground">Dica: no canvas, arraste o sprite para mover. Arraste o quadrado no canto para redimensionar proporcionalmente.</p>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                      <p>Selecione um NPC no mapa para editar dimensoes.</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
               <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
                 <p className="mb-2 font-medium text-foreground">Pan/Zoom</p>
                 <p className="mb-1">Clique no mapa para focar edicao.</p>
@@ -1666,9 +2050,42 @@ export const AdminMapasPage = () => {
                 onPointerDown={(event) => {
                   setIsCanvasFocused(true);
                   const tile = worldTileFromPointer(event);
+                  const worldPoint = worldPointFromPointer(event);
                   hoverTileRef.current = tile;
                   lastPaintedTileKeyRef.current = null;
                   if (!mapDraft) return;
+
+                  if (tab === "npcs" && worldPoint && tool !== "navigate") {
+                    const hitPlacement = findNpcPlacementAtWorldPoint(worldPoint.x, worldPoint.y);
+                    if (hitPlacement) {
+                      setSelectedNpcPlacementId(hitPlacement.id);
+                      if (tool === "erase") {
+                        handleRemoveNpcPlacement(hitPlacement.id);
+                        return;
+                      }
+
+                      const centerX = hitPlacement.tileX * TILE_SIZE + TILE_SIZE / 2;
+                      const baseY = hitPlacement.tileY * TILE_SIZE + TILE_SIZE;
+                      const left = centerX - hitPlacement.width / 2;
+                      const top = baseY - hitPlacement.height;
+                      const handleX = left + hitPlacement.width;
+                      const handleY = top + hitPlacement.height;
+                      const nearHandle = Math.abs(worldPoint.x - handleX) <= 12 && Math.abs(worldPoint.y - handleY) <= 12;
+
+                      npcTransformRef.current = {
+                        active: true,
+                        mode: nearHandle ? "resize" : "move",
+                        placementId: hitPlacement.id,
+                        startWorldX: worldPoint.x,
+                        startWorldY: worldPoint.y,
+                        startTileX: hitPlacement.tileX,
+                        startTileY: hitPlacement.tileY,
+                        startWidth: hitPlacement.width,
+                        startHeight: hitPlacement.height,
+                      };
+                      return;
+                    }
+                  }
 
                   if (tool === "navigate" || event.button === 1 || event.shiftKey || spacePressedRef.current) {
                     dragRef.current = {
@@ -1690,17 +2107,50 @@ export const AdminMapasPage = () => {
                   if (!tile || tab === "mapa_base") return;
                   if (tab === "inimigos" && !selectedEnemySpawnId) return;
                   if (tab === "portais" && !selectedPortalId) return;
+                  if (tab === "npcs" && tool === "add" && !newNpcId) return;
                   paintRef.current = true;
                   lastPaintedTileKeyRef.current = `${tile.x}:${tile.y}`;
                   applyBrush(tile);
                 }}
                 onPointerMove={(event) => {
                   const tile = worldTileFromPointer(event);
+                  const worldPoint = worldPointFromPointer(event);
                   hoverTileRef.current = tile;
 
                   if (dragRef.current.active) {
                     panRef.current.x = dragRef.current.panX + (event.clientX - dragRef.current.startX);
                     panRef.current.y = dragRef.current.panY + (event.clientY - dragRef.current.startY);
+                  }
+
+                  if (npcTransformRef.current.active && worldPoint) {
+                    const transform = npcTransformRef.current;
+                    if (transform.mode === "move") {
+                      const deltaTileX = Math.round((worldPoint.x - transform.startWorldX) / TILE_SIZE);
+                      const deltaTileY = Math.round((worldPoint.y - transform.startWorldY) / TILE_SIZE);
+                      updateNpcPlacement(transform.placementId, (placement) => ({
+                        ...placement,
+                        tileX: clamp(transform.startTileX + deltaTileX, 0, GRID_COLS - 1),
+                        tileY: clamp(transform.startTileY + deltaTileY, 0, GRID_ROWS - 1),
+                      }));
+                    } else {
+                      const deltaX = worldPoint.x - transform.startWorldX;
+                      const deltaY = worldPoint.y - transform.startWorldY;
+                      const baseWidth = Math.max(8, transform.startWidth);
+                      const baseHeight = Math.max(8, transform.startHeight);
+                      const scaleX = (baseWidth + deltaX) / baseWidth;
+                      const scaleY = (baseHeight + deltaY) / baseHeight;
+                      const dominantScale =
+                        Math.abs(scaleX - 1) >= Math.abs(scaleY - 1) ? scaleX : scaleY;
+                      const minScale = Math.max(8 / baseWidth, 8 / baseHeight);
+                      const maxScale = Math.min(2000 / baseWidth, 2000 / baseHeight);
+                      const nextScale = clamp(dominantScale, minScale, maxScale);
+                      updateNpcPlacement(transform.placementId, (placement) => ({
+                        ...placement,
+                        width: clamp(baseWidth * nextScale, 8, 2000),
+                        height: clamp(baseHeight * nextScale, 8, 2000),
+                      }));
+                    }
+                    return;
                   }
 
                   if (paintRef.current && tile && tab !== "mapa_base") {
@@ -1716,12 +2166,14 @@ export const AdminMapasPage = () => {
                   dragRef.current.active = false;
                   paintRef.current = false;
                   lastPaintedTileKeyRef.current = null;
+                  npcTransformRef.current = { active: false };
                 }}
                 onPointerLeave={() => {
                   dragRef.current.active = false;
                   paintRef.current = false;
                   lastPaintedTileKeyRef.current = null;
                   hoverTileRef.current = null;
+                  npcTransformRef.current = { active: false };
                 }}
                 onWheel={(event) => {
                   if (!isCanvasFocused) {

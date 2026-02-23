@@ -43,6 +43,8 @@ const bestiarySchema = z.object({
   spriteScale: z.number().positive(),
   flipHorizontal: z.boolean(),
   powerLevel: z.enum(["ROOKIE", "CHAMPION", "ULTIMATE", "MEGA", "BURST_MODE"]),
+  bitsDrop: z.number().int().min(0),
+  xpDrop: z.number().int().min(0),
   drops: z.array(dropSchema).max(30),
 });
 
@@ -60,6 +62,8 @@ const defaultValues: BestiaryFormValues = {
   spriteScale: 3,
   flipHorizontal: false,
   powerLevel: "ROOKIE",
+  bitsDrop: Math.round((65 + 58) * 0.05),
+  xpDrop: Math.round((65 + 58) * 0.15),
   drops: [],
 };
 
@@ -75,6 +79,8 @@ const toPayload = (values: BestiaryFormValues): CreateBestiaryAnimaInput => ({
   spriteScale: values.spriteScale,
   flipHorizontal: values.flipHorizontal,
   powerLevel: values.powerLevel,
+  bitsDrop: values.bitsDrop,
+  xpDrop: values.xpDrop,
   drops: values.drops,
 });
 
@@ -173,8 +179,17 @@ const AnimaFormFields = ({
   form: ReturnType<typeof useForm<BestiaryFormValues>>;
   drops: ReturnType<typeof useFieldArray<BestiaryFormValues, "drops">>;
   items: Item[];
-}) => (
-  <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
+}) => {
+  const applyDropSuggestion = () => {
+    const attack = Math.max(1, Number(form.getValues("attack")) || 1);
+    const defense = Math.max(1, Number(form.getValues("defense")) || 1);
+    const totalPower = attack + defense;
+    form.setValue("bitsDrop", Math.round(totalPower * 0.05), { shouldDirty: true });
+    form.setValue("xpDrop", Math.round(totalPower * 0.15), { shouldDirty: true });
+  };
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
     <div className="space-y-4">
       <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Identificacao</p>
@@ -295,6 +310,38 @@ const AnimaFormFields = ({
               </FormItem>
             )}
           />
+          <FormField
+            control={form.control}
+            name="bitsDrop"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Drop de Bits</FormLabel>
+                <FormControl>
+                  <Input type="number" min={0} value={field.value} onChange={(event) => field.onChange(Math.max(0, Number(event.target.value) || 0))} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="xpDrop"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Drop de XP</FormLabel>
+                <FormControl>
+                  <Input type="number" min={0} value={field.value} onChange={(event) => field.onChange(Math.max(0, Number(event.target.value) || 0))} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11px] text-muted-foreground">Sugestao de balanceamento: XP = 15% e Bits = 5% de (ATK + DEF).</p>
+          <Button type="button" size="sm" variant="outline" onClick={applyDropSuggestion}>
+            Recalcular auto
+          </Button>
         </div>
       </div>
 
@@ -359,7 +406,8 @@ const AnimaFormFields = ({
       ) : null}
     </div>
   </div>
-);
+  );
+};
 
 export const AdminBestiarioPage = () => {
   const [animas, setAnimas] = useState<BestiaryAnima[]>([]);
@@ -453,6 +501,8 @@ export const AdminBestiarioPage = () => {
       spriteScale: anima.spriteScale ?? 3,
       flipHorizontal: anima.flipHorizontal ?? false,
       powerLevel: anima.powerLevel,
+      bitsDrop: anima.bitsDrop,
+      xpDrop: anima.xpDrop,
       drops: anima.drops.map((drop) => ({
         itemId: drop.itemId,
         quantity: drop.quantity,
@@ -716,6 +766,14 @@ export const AdminBestiarioPage = () => {
                               Critico
                             </div>
                             <p className="font-semibold">{selectedAnima.critChance.toFixed(1)}%</p>
+                          </div>
+                          <div className="rounded-md border bg-muted/20 p-2 text-sm">
+                            <div className="mb-1 inline-flex items-center gap-1 text-muted-foreground">Drop Bits</div>
+                            <p className="font-semibold">{selectedAnima.bitsDrop}</p>
+                          </div>
+                          <div className="rounded-md border bg-muted/20 p-2 text-sm">
+                            <div className="mb-1 inline-flex items-center gap-1 text-muted-foreground">Drop XP</div>
+                            <p className="font-semibold">{selectedAnima.xpDrop}</p>
                           </div>
                         </div>
                       </div>

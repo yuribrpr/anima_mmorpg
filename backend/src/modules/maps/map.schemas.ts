@@ -32,6 +32,17 @@ const mapPortalSchema = z.object({
   area: portalAreaLayerSchema,
 });
 
+const mapNpcPlacementSchema = z.object({
+  id: z.string().min(1).max(120),
+  npcId: z.string().min(1),
+  npcName: z.string().trim().min(1).max(120).nullable().optional().default(null),
+  imageData: z.string().max(55_000_000).nullable().optional().default(null),
+  tileX: z.number().int().min(0).max(MAP_COLS - 1),
+  tileY: z.number().int().min(0).max(MAP_ROWS - 1),
+  width: z.number().min(8).max(2000),
+  height: z.number().min(8).max(2000),
+});
+
 export const mapIdParamsSchema = z.object({
   id: z.string().min(1),
 });
@@ -56,6 +67,7 @@ export const updateMapLayoutSchema = z.object({
   collisionLayer: collisionLayerSchema,
   enemySpawns: z.array(mapEnemySpawnSchema).max(100).default([]),
   portals: z.array(mapPortalSchema).max(300).default([]),
+  npcPlacements: z.array(mapNpcPlacementSchema).max(400).default([]),
   spawnX: z.number().int().min(0).max(MAP_COLS - 1),
   spawnY: z.number().int().min(0).max(MAP_ROWS - 1),
   backgroundScale: z.number().min(0.1).max(5),

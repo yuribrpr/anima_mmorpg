@@ -32,6 +32,7 @@ const toMapOutput = (map: MapEntity): GameMapOutput => ({
   collisionLayer: map.collisionLayer,
   enemySpawns: map.enemySpawns,
   portals: map.portals,
+  npcPlacements: map.npcPlacements,
   spawnX: map.spawnX,
   spawnY: map.spawnY,
   isActive: map.isActive,

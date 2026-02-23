@@ -1,14 +1,23 @@
 import { GameMap, PlayerMapState, Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
-import { MapEnemySpawnConfig, MapPortalConfig, MapTileAsset, UpdateActiveMapStateInput, UpdateMapAssetsInput, UpdateMapLayoutInput } from "../../types/map";
+import {
+  MapEnemySpawnConfig,
+  MapNpcPlacementConfig,
+  MapPortalConfig,
+  MapTileAsset,
+  UpdateActiveMapStateInput,
+  UpdateMapAssetsInput,
+  UpdateMapLayoutInput,
+} from "../../types/map";
 import { MAP_CELL_SIZE, MAP_COLS, MAP_DEFAULT_SCALE, MAP_ROWS, MAP_WORLD_HEIGHT, MAP_WORLD_WIDTH } from "./map.constants";
 
-type MapEntity = Omit<GameMap, "tilePalette" | "tileLayer" | "collisionLayer" | "enemySpawns" | "portals"> & {
+type MapEntity = Omit<GameMap, "tilePalette" | "tileLayer" | "collisionLayer" | "enemySpawns" | "portals" | "npcPlacements"> & {
   tilePalette: MapTileAsset[];
   tileLayer: (number | null)[][];
   collisionLayer: boolean[][];
   enemySpawns: MapEnemySpawnConfig[];
   portals: MapPortalConfig[];
+  npcPlacements: MapNpcPlacementConfig[];
 };
 
 type PlayerMapStateEntity = PlayerMapState;
@@ -121,6 +130,16 @@ const normalizePortalAreaLayer = (value: unknown): boolean[][] => {
   });
 };
 
+const clampTileX = (value: unknown) => {
+  const raw = typeof value === "number" ? Math.floor(value) : 0;
+  return Math.max(0, Math.min(MAP_COLS - 1, raw));
+};
+
+const clampTileY = (value: unknown) => {
+  const raw = typeof value === "number" ? Math.floor(value) : 0;
+  return Math.max(0, Math.min(MAP_ROWS - 1, raw));
+};
+
 const normalizeEnemySpawns = (value: Prisma.JsonValue | null | undefined): MapEnemySpawnConfig[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -188,6 +207,39 @@ const normalizePortals = (value: Prisma.JsonValue | null | undefined): MapPortal
   return output;
 };
 
+const normalizeNpcPlacements = (value: Prisma.JsonValue | null | undefined): MapNpcPlacementConfig[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const output: MapNpcPlacementConfig[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const data = item as Record<string, unknown>;
+    if (typeof data.id !== "string" || typeof data.npcId !== "string") {
+      continue;
+    }
+
+    const width = typeof data.width === "number" ? data.width : 96;
+    const height = typeof data.height === "number" ? data.height : 96;
+    output.push({
+      id: data.id,
+      npcId: data.npcId,
+      npcName: typeof data.npcName === "string" ? data.npcName : null,
+      imageData: typeof data.imageData === "string" ? data.imageData : null,
+      tileX: clampTileX(data.tileX),
+      tileY: clampTileY(data.tileY),
+      width: Math.max(8, Math.min(2000, width)),
+      height: Math.max(8, Math.min(2000, height)),
+    });
+  }
+
+  return output;
+};
+
 const sanitizeEnemySpawnsForStorage = (enemySpawns: MapEnemySpawnConfig[]) =>
   enemySpawns.map((spawn) => ({
     id: spawn.id,
@@ -213,6 +265,18 @@ const sanitizePortalsForStorage = (portals: MapPortalConfig[]) =>
     area: portal.area,
   }));
 
+const sanitizeNpcPlacementsForStorage = (npcPlacements: MapNpcPlacementConfig[]) =>
+  npcPlacements.map((placement) => ({
+    id: placement.id,
+    npcId: placement.npcId,
+    npcName: placement.npcName ?? null,
+    imageData: typeof placement.imageData === "string" ? placement.imageData : null,
+    tileX: clampTileX(placement.tileX),
+    tileY: clampTileY(placement.tileY),
+    width: Math.max(8, Math.min(2000, placement.width)),
+    height: Math.max(8, Math.min(2000, placement.height)),
+  }));
+
 const toEntity = (map: GameMap): MapEntity => ({
   ...map,
   tilePalette: normalizeTilePalette(map.tilePalette),
@@ -220,6 +284,7 @@ const toEntity = (map: GameMap): MapEntity => ({
   collisionLayer: normalizeCollisionLayer(map.collisionLayer),
   enemySpawns: normalizeEnemySpawns(map.enemySpawns),
   portals: normalizePortals(map.portals),
+  npcPlacements: normalizeNpcPlacements(map.npcPlacements),
 });
 
 const defaultMapCreateData = (name: string, isActive: boolean) => ({
@@ -236,6 +301,7 @@ const defaultMapCreateData = (name: string, isActive: boolean) => ({
   collisionLayer: createEmptyCollisionLayer(),
   enemySpawns: [],
   portals: [],
+  npcPlacements: [],
   spawnX: Math.floor(MAP_COLS / 2),
   spawnY: Math.floor(MAP_ROWS / 2),
   isActive,
@@ -357,6 +423,7 @@ export class PrismaMapRepository implements MapRepository {
         collisionLayer: input.collisionLayer,
         enemySpawns: sanitizeEnemySpawnsForStorage(input.enemySpawns),
         portals: sanitizePortalsForStorage(input.portals),
+        npcPlacements: sanitizeNpcPlacementsForStorage(input.npcPlacements),
         spawnX: input.spawnX,
         spawnY: input.spawnY,
         backgroundScale: input.backgroundScale,

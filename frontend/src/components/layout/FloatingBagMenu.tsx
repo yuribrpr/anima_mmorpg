@@ -1,10 +1,13 @@
 import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Backpack, Coins, Gem, Lock, Sparkles, X } from "lucide-react";
+import { Backpack, ClipboardList, Coins, Gem, Lock, Sparkles, X } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { getUserInventory, updateInventoryLayout, useInventoryItem } from "@/lib/inventario";
+import { listPlayerQuests } from "@/lib/npcs";
 import { cn } from "@/lib/utils";
 import type { InventoryItem, InventoryItemLayout, UserInventory } from "@/types/inventario";
+import type { PlayerQuest } from "@/types/npc";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type BagCategory = "all" | "consumable" | "quest" | "normal";
 
@@ -105,6 +108,11 @@ export const FloatingBagMenu = ({ embedded = false }: FloatingBagMenuProps) => {
   const [isSavingLayout, setIsSavingLayout] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isUsingItem, setIsUsingItem] = useState(false);
+  const [isQuestOpen, setIsQuestOpen] = useState(false);
+  const [activeQuests, setActiveQuests] = useState<PlayerQuest[]>([]);
+  const [completedQuests, setCompletedQuests] = useState<PlayerQuest[]>([]);
+  const [questLoading, setQuestLoading] = useState(false);
+  const [questErrorMessage, setQuestErrorMessage] = useState<string | null>(null);
 
   const canDragSlots = activeTab === "all" && !isSavingLayout && !isUsingItem;
   const selectedBagItem = useMemo(() => slotItems[selectedSlot] ?? null, [selectedSlot, slotItems]);
@@ -138,6 +146,24 @@ export const FloatingBagMenu = ({ embedded = false }: FloatingBagMenuProps) => {
       }
     } finally {
       setInventoryLoaded(true);
+    }
+  }, []);
+
+  const loadQuests = useCallback(async () => {
+    setQuestLoading(true);
+    try {
+      const quests = await listPlayerQuests();
+      setActiveQuests(quests.activeQuests);
+      setCompletedQuests(quests.completedQuests);
+      setQuestErrorMessage(null);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setQuestErrorMessage(error.message);
+      } else {
+        setQuestErrorMessage("Falha ao carregar quests.");
+      }
+    } finally {
+      setQuestLoading(false);
     }
   }, []);
 
@@ -175,6 +201,14 @@ export const FloatingBagMenu = ({ embedded = false }: FloatingBagMenuProps) => {
   }, [loadInventory]);
 
   useEffect(() => {
+    const onQuestChanged = () => {
+      void loadQuests();
+    };
+    window.addEventListener("quest:changed", onQuestChanged as EventListener);
+    return () => window.removeEventListener("quest:changed", onQuestChanged as EventListener);
+  }, [loadQuests]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
       const target = event.target as HTMLElement | null;
@@ -207,6 +241,13 @@ export const FloatingBagMenu = ({ embedded = false }: FloatingBagMenuProps) => {
       return firstVisibleSlot >= 0 ? firstVisibleSlot : 0;
     });
   }, [firstVisibleSlot, inventoryLoaded, isBagOpen, loadInventory, visibleSlots]);
+
+  useEffect(() => {
+    if (!isQuestOpen) {
+      return;
+    }
+    void loadQuests();
+  }, [isQuestOpen, loadQuests]);
 
   useEffect(() => {
     if (!dragState.active) return;
@@ -304,18 +345,33 @@ export const FloatingBagMenu = ({ embedded = false }: FloatingBagMenuProps) => {
   return (
     <>
       <div className={cn(embedded ? "absolute bottom-4 right-4 z-30" : "fixed bottom-5 right-5 z-50")}>
-        <div className="w-[78px] rounded-xl border border-border bg-card/90 p-2 shadow-lg backdrop-blur">
-          <Button
-            type="button"
-            size="icon"
-            variant={isBagOpen ? "default" : "outline"}
-            className="mx-auto h-10 w-10 rounded-lg"
-            onClick={() => setIsBagOpen((current) => !current)}
-            aria-label="Abrir inventario de itens"
-          >
-            <Backpack className="h-5 w-5" />
-          </Button>
-          <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Inventario</p>
+        <div className="flex items-center gap-2 rounded-xl border border-border bg-card/90 p-2 shadow-lg backdrop-blur">
+          <div className="w-[72px]">
+            <Button
+              type="button"
+              size="icon"
+              variant={isBagOpen ? "default" : "outline"}
+              className="mx-auto h-10 w-10 rounded-lg"
+              onClick={() => setIsBagOpen((current) => !current)}
+              aria-label="Abrir inventario de itens"
+            >
+              <Backpack className="h-5 w-5" />
+            </Button>
+            <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Inventario</p>
+          </div>
+          <div className="w-[72px]">
+            <Button
+              type="button"
+              size="icon"
+              variant={isQuestOpen ? "default" : "outline"}
+              className="mx-auto h-10 w-10 rounded-lg"
+              onClick={() => setIsQuestOpen((current) => !current)}
+              aria-label="Abrir lista de quests"
+            >
+              <ClipboardList className="h-5 w-5" />
+            </Button>
+            <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Quests</p>
+          </div>
         </div>
       </div>
 
@@ -474,6 +530,57 @@ export const FloatingBagMenu = ({ embedded = false }: FloatingBagMenuProps) => {
           </div>
         </div>
       ) : null}
+
+      <Dialog open={isQuestOpen} onOpenChange={setIsQuestOpen}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Quests</DialogTitle>
+            <DialogDescription className="text-slate-300">Lista completa das quests ativas e finalizadas.</DialogDescription>
+          </DialogHeader>
+
+          {questErrorMessage ? <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{questErrorMessage}</p> : null}
+          {questLoading ? <p className="text-sm text-muted-foreground">Carregando quests...</p> : null}
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-semibold">Ativas ({activeQuests.length}/3)</p>
+              <div className="max-h-[32vh] space-y-2 overflow-y-auto pr-1">
+                {activeQuests.length === 0 ? <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-xs text-slate-400">Sem quests ativas.</p> : null}
+                {activeQuests.map((quest) => (
+                  <div key={quest.id} className="rounded-md border border-slate-200/20 bg-slate-900/45 p-3">
+                    <p className="text-sm font-medium">{quest.title}</p>
+                    <p className="text-xs text-slate-300">{quest.description}</p>
+                    <div className="mt-2 space-y-1">
+                      {quest.objectives.map((objective) => (
+                        <p key={objective.id} className="text-xs text-slate-200">
+                          {objective.type === "TALK"
+                            ? `Falar com ${objective.npcName ?? objective.npcId}: ${objective.current}/${objective.required}`
+                            : objective.type === "KILL"
+                              ? `Matar ${objective.bestiaryName ?? objective.bestiaryAnimaId}: ${objective.current}/${objective.required}`
+                              : `Dropar ${objective.itemName ?? objective.itemId}: ${objective.current}/${objective.required}`}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-semibold">Concluidas</p>
+              <div className="max-h-[24vh] space-y-2 overflow-y-auto pr-1">
+                {completedQuests.length === 0 ? <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-xs text-slate-400">Nenhuma quest concluida.</p> : null}
+                {completedQuests.map((quest) => (
+                  <div key={quest.id} className="rounded-md border border-slate-200/20 bg-slate-900/45 p-3">
+                    <p className="text-sm font-medium">{quest.title}</p>
+                    <p className="text-xs text-slate-300">{quest.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

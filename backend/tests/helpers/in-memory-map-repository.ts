@@ -25,6 +25,7 @@ const createMapEntity = (id: string, name: string, isActive: boolean): MapEntity
     collisionLayer: createEmptyCollisionLayer(),
     enemySpawns: [],
     portals: [],
+    npcPlacements: [],
     spawnX: Math.floor(MAP_COLS / 2),
     spawnY: Math.floor(MAP_ROWS / 2),
     isActive,
@@ -76,6 +77,7 @@ export class InMemoryMapRepository implements MapRepository {
     map.collisionLayer = input.collisionLayer;
     map.enemySpawns = input.enemySpawns;
     map.portals = input.portals;
+    map.npcPlacements = input.npcPlacements;
     map.spawnX = input.spawnX;
     map.spawnY = input.spawnY;
     map.backgroundScale = input.backgroundScale;

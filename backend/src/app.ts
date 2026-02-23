@@ -18,6 +18,7 @@ import { createItemRouter } from "./modules/items/item.routes";
 import { ItemRepository, PrismaItemRepository } from "./modules/items/item.repository";
 import { createMapRouter } from "./modules/maps/map.routes";
 import { MapRepository, PrismaMapRepository } from "./modules/maps/map.repository";
+import { createNpcRouter } from "./modules/npcs/npc.routes";
 
 type AppDependencies = {
   userRepository?: UserRepository;
@@ -59,6 +60,7 @@ export const createApp = (dependencies: AppDependencies = {}) => {
   app.use("/bestiario", createBestiaryAnimaRouter(bestiaryAnimaRepository));
   app.use("/adocoes", createAdoptionRouter(adoptionRepository, animaRepository));
   app.use("/mapas", createMapRouter(mapRepository));
+  app.use("/npcs", createNpcRouter());
   app.use("/inventario", createInventoryRouter(inventoryRepository));
   app.use("/itens", createItemRouter(itemRepository));
 

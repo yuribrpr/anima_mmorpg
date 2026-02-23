@@ -29,6 +29,17 @@ export type MapPortalConfig = {
   area: boolean[][];
 };
 
+export type MapNpcPlacementConfig = {
+  id: string;
+  npcId: string;
+  npcName: string | null;
+  imageData: string | null;
+  tileX: number;
+  tileY: number;
+  width: number;
+  height: number;
+};
+
 export type GameMapOutput = {
   id: string;
   name: string;
@@ -44,6 +55,7 @@ export type GameMapOutput = {
   collisionLayer: boolean[][];
   enemySpawns: MapEnemySpawnConfig[];
   portals: MapPortalConfig[];
+  npcPlacements: MapNpcPlacementConfig[];
   spawnX: number;
   spawnY: number;
   isActive: boolean;
@@ -105,6 +117,7 @@ export type UpdateMapLayoutInput = {
   collisionLayer: boolean[][];
   enemySpawns: MapEnemySpawnConfig[];
   portals: MapPortalConfig[];
+  npcPlacements: MapNpcPlacementConfig[];
   spawnX: number;
   spawnY: number;
   backgroundScale: number;

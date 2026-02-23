@@ -47,6 +47,8 @@ export type CreateBestiaryAnimaInput = {
   spriteScale: number;
   flipHorizontal: boolean;
   powerLevel: PowerLevel;
+  bitsDrop: number;
+  xpDrop: number;
   drops: BestiaryDropInput[];
 };
 
