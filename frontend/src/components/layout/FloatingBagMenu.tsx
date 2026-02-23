@@ -1,5 +1,5 @@
 import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Backpack, ClipboardList, Coins, Lock, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
+import { Backpack, ClipboardList, Coins, Lock, Maximize2, Minimize2, X } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { evolveAdoptedAnima, getAdoptedAnimaEvolutionChain, listAdoptedAnimas, regressAdoptedAnima } from "@/lib/adocoes";
 import { getUserInventory, updateInventoryHotbar, updateInventoryLayout, useInventoryItem } from "@/lib/inventario";
@@ -123,7 +123,6 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isUsingItem, setIsUsingItem] = useState(false);
   const [isQuestOpen, setIsQuestOpen] = useState(false);
-  const [isEvolutionOpen, setIsEvolutionOpen] = useState(false);
   const [activeQuests, setActiveQuests] = useState<PlayerQuest[]>([]);
   const [completedQuests, setCompletedQuests] = useState<PlayerQuest[]>([]);
   const [questLoading, setQuestLoading] = useState(false);
@@ -135,9 +134,7 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   const [hotbarSlots, setHotbarSlots] = useState<(string | null)[]>(() => getDefaultHotbar());
   const [primaryAdoptedAnima, setPrimaryAdoptedAnima] = useState<AdoptedAnima | null>(null);
   const [evolutionChain, setEvolutionChain] = useState<AdoptionEvolutionChain | null>(null);
-  const [evolutionLoading, setEvolutionLoading] = useState(false);
   const [evolutionSubmitting, setEvolutionSubmitting] = useState(false);
-  const [evolutionErrorMessage, setEvolutionErrorMessage] = useState<string | null>(null);
 
   const showFocusToggle = Boolean(onToggleFocusMode);
 
@@ -316,22 +313,18 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   }, []);
 
   const loadPrimaryAdoptedAnima = useCallback(async () => {
-    setEvolutionLoading(true);
     try {
       const animas = await listAdoptedAnimas();
       const primary = animas.find((item) => item.isPrimary) ?? null;
       setPrimaryAdoptedAnima(primary);
       await syncEvolutionChain(primary);
-      setEvolutionErrorMessage(null);
     } catch (error) {
       setEvolutionChain(null);
       if (error instanceof ApiError) {
-        setEvolutionErrorMessage(error.message);
+        setStatusMessage(error.message);
       } else {
-        setEvolutionErrorMessage("Falha ao carregar dados de evolucao.");
+        setStatusMessage("Falha ao carregar dados de evolucao.");
       }
-    } finally {
-      setEvolutionLoading(false);
     }
   }, [syncEvolutionChain]);
 
@@ -378,13 +371,11 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
 
   useEffect(() => {
     const onAdoptionChanged = () => {
-      if (isEvolutionOpen) {
-        void loadPrimaryAdoptedAnima();
-      }
+      void loadPrimaryAdoptedAnima();
     };
     window.addEventListener("adoption:changed", onAdoptionChanged as EventListener);
     return () => window.removeEventListener("adoption:changed", onAdoptionChanged as EventListener);
-  }, [isEvolutionOpen, loadPrimaryAdoptedAnima]);
+  }, [loadPrimaryAdoptedAnima]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -428,11 +419,8 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   }, [isQuestOpen, loadQuests]);
 
   useEffect(() => {
-    if (!isEvolutionOpen) {
-      return;
-    }
     void loadPrimaryAdoptedAnima();
-  }, [isEvolutionOpen, loadPrimaryAdoptedAnima]);
+  }, [loadPrimaryAdoptedAnima]);
 
   useEffect(() => {
     if (!dragState.active) return;
@@ -580,9 +568,7 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
       const updated = await evolveAdoptedAnima(primaryAdoptedAnima.id);
       setPrimaryAdoptedAnima(updated);
       await syncEvolutionChain(updated);
-      setEvolutionErrorMessage(null);
       setStatusMessage(`${previous.nickname} evoluiu para ${updated.baseAnima.name}.`);
-      setIsEvolutionOpen(false);
       window.dispatchEvent(
         new CustomEvent("explore:anima-evolved", {
           detail: {
@@ -594,9 +580,9 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
       );
     } catch (error) {
       if (error instanceof ApiError) {
-        setEvolutionErrorMessage(error.message);
+        setStatusMessage(error.message);
       } else {
-        setEvolutionErrorMessage("Falha ao evoluir anima.");
+        setStatusMessage("Falha ao evoluir anima.");
       }
     } finally {
       setEvolutionSubmitting(false);
@@ -613,9 +599,7 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
       const updated = await regressAdoptedAnima(primaryAdoptedAnima.id);
       setPrimaryAdoptedAnima(updated);
       await syncEvolutionChain(updated);
-      setEvolutionErrorMessage(null);
       setStatusMessage(`${previous.nickname} regrediu para ${updated.baseAnima.name}.`);
-      setIsEvolutionOpen(false);
       window.dispatchEvent(
         new CustomEvent("explore:anima-evolved", {
           detail: {
@@ -627,9 +611,9 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
       );
     } catch (error) {
       if (error instanceof ApiError) {
-        setEvolutionErrorMessage(error.message);
+        setStatusMessage(error.message);
       } else {
-        setEvolutionErrorMessage("Falha ao regredir anima.");
+        setStatusMessage("Falha ao regredir anima.");
       }
     } finally {
       setEvolutionSubmitting(false);
@@ -687,7 +671,7 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
         <div
           className={cn(
             "grid gap-2 rounded-2xl border border-slate-200/20 bg-gradient-to-br from-slate-950/92 via-slate-900/90 to-slate-950/92 p-2 shadow-[0_22px_48px_-22px_rgba(0,0,0,0.75)] backdrop-blur-xl",
-            showFocusToggle ? "grid-cols-4" : "grid-cols-3",
+            showFocusToggle ? "grid-cols-3" : "grid-cols-2",
           )}
         >
           <div className="flex min-w-[72px] flex-col items-center justify-center">
@@ -715,19 +699,6 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
               <ClipboardList className="h-5 w-5" />
             </Button>
             <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Quests</p>
-          </div>
-          <div className="flex min-w-[72px] flex-col items-center justify-center">
-            <Button
-              type="button"
-              size="icon"
-              variant={isEvolutionOpen ? "default" : "outline"}
-              className="mx-auto h-10 w-10 rounded-lg border-slate-300/20 bg-slate-900/55 text-slate-100 hover:bg-slate-900/75"
-              onClick={() => setIsEvolutionOpen((current) => !current)}
-              aria-label="Abrir painel de evolucoes"
-            >
-              <Sparkles className="h-5 w-5" />
-            </Button>
-            <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Evolucoes</p>
           </div>
           {showFocusToggle ? (
             <div className="flex min-w-[72px] flex-col items-center justify-center">
@@ -1051,122 +1022,6 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
               </div>
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isEvolutionOpen} onOpenChange={setIsEvolutionOpen}>
-        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Evolucoes</DialogTitle>
-            <DialogDescription className="text-slate-300">Desbloqueie e evolua seu anima principal.</DialogDescription>
-          </DialogHeader>
-
-          {evolutionErrorMessage ? <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{evolutionErrorMessage}</p> : null}
-          {evolutionLoading ? <p className="text-sm text-muted-foreground">Carregando evolucoes...</p> : null}
-
-          {primaryAdoptedAnima ? (
-            <div className="space-y-4">
-              <div className="grid gap-3 rounded-xl border border-slate-200/15 bg-slate-950/40 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
-                <div>
-                  <p className="text-sm font-semibold text-slate-100">{primaryAdoptedAnima.nickname}</p>
-                  <p className="text-xs text-slate-400">Especie atual: {primaryAdoptedAnima.baseAnima.name}</p>
-                </div>
-                <div className="rounded-md border border-slate-200/20 bg-slate-900/55 px-2 py-1 text-xs text-slate-200">
-                  Nivel {primaryAdoptedAnima.level}
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-2 rounded-xl border border-slate-200/15 bg-slate-950/40 p-3">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-400">Regredir</p>
-                  <button
-                    type="button"
-                    disabled={!canRegress || evolutionSubmitting}
-                    className={cn(
-                      "group relative w-full overflow-hidden rounded-lg border border-slate-300/20 bg-slate-950/55 p-4 text-left transition",
-                      canRegress ? "hover:border-amber-300/55 hover:bg-slate-900/65" : "cursor-not-allowed opacity-75",
-                    )}
-                    onClick={() => void handleRegressAnima()}
-                  >
-                    <div className="flex items-center gap-3">
-                      {primaryAdoptedAnima.baseAnima.previousEvolution?.imageData ? (
-                        <img
-                          src={primaryAdoptedAnima.baseAnima.previousEvolution.imageData}
-                          alt={primaryAdoptedAnima.baseAnima.previousEvolution.name}
-                          className="h-14 w-14 object-contain"
-                        />
-                      ) : (
-                        <div className="h-14 w-14 rounded-md border border-slate-300/20 bg-slate-900/50" />
-                      )}
-                      <div>
-                        <p className="text-sm font-semibold text-slate-100">{primaryAdoptedAnima.baseAnima.previousEvolution?.name ?? "Sem regressao"}</p>
-                        <p className="text-xs text-slate-400">
-                          {canRegress ? "Clique para voltar para a evolucao anterior." : "Nao ha evolucao anterior."}
-                        </p>
-                      </div>
-                    </div>
-                  </button>
-                </div>
-
-                <div className="space-y-2 rounded-xl border border-slate-200/15 bg-slate-950/40 p-3">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-400">Proxima evolucao</p>
-                  {primaryAdoptedAnima.baseAnima.nextEvolution ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={!canEvolve || evolutionSubmitting}
-                        className={cn(
-                          "group relative w-full overflow-hidden rounded-lg border border-slate-300/20 bg-slate-950/55 p-4 text-left transition",
-                          canEvolve ? "hover:border-sky-300/55 hover:bg-slate-900/65" : "cursor-not-allowed opacity-75",
-                        )}
-                        onClick={() => void handleEvolveAnima()}
-                      >
-                        <div className="flex items-center gap-3">
-                          {primaryAdoptedAnima.baseAnima.nextEvolution.imageData ? (
-                            <img
-                              src={primaryAdoptedAnima.baseAnima.nextEvolution.imageData}
-                              alt={primaryAdoptedAnima.baseAnima.nextEvolution.name}
-                              className="h-14 w-14 object-contain"
-                            />
-                          ) : (
-                            <div className="h-14 w-14 rounded-md border border-slate-300/20 bg-slate-900/50" />
-                          )}
-                          <div>
-                            <p className="text-sm font-semibold text-slate-100">{primaryAdoptedAnima.baseAnima.nextEvolution.name}</p>
-                            <p className="text-xs text-slate-400">
-                              {canEvolve ? "Clique para evoluir agora." : "Nivel insuficiente para evoluir."}
-                            </p>
-                          </div>
-                        </div>
-                      </button>
-
-                      <p className="text-xs text-slate-300">
-                        Requisito: nivel {primaryAdoptedAnima.baseAnima.nextEvolutionLevelRequired}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-xs text-slate-400">
-                      Este anima nao possui proxima evolucao.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {primaryAdoptedAnima.baseAnima.nextEvolution ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  {canEvolve ? (
-                    <p className="text-xs text-emerald-300">Evolucao disponivel automaticamente pelo nivel.</p>
-                  ) : (
-                    <p className="text-xs text-amber-300">
-                      Nivel insuficiente. Necessario nivel {primaryAdoptedAnima.baseAnima.nextEvolutionLevelRequired}.
-                    </p>
-                  )}
-                </div>
-              ) : null}
-            </div>
-          ) : !evolutionLoading ? (
-            <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-xs text-slate-400">Nenhum anima principal encontrado.</p>
-          ) : null}
         </DialogContent>
       </Dialog>
 
