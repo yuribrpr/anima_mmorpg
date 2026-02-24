@@ -133,8 +133,39 @@ export class PrismaBestiaryAnimaRepository implements BestiaryAnimaRepository {
   }
 
   async delete(id: string) {
-    await prisma.bestiaryAnima.delete({
-      where: { id },
+    await prisma.$transaction(async (transaction) => {
+      const maps = await transaction.gameMap.findMany({
+        select: {
+          id: true,
+          enemySpawns: true,
+        },
+      });
+
+      for (const map of maps) {
+        if (!Array.isArray(map.enemySpawns)) {
+          continue;
+        }
+        const nextEnemySpawns = map.enemySpawns.filter((spawn) => {
+          if (!spawn || typeof spawn !== "object") {
+            return true;
+          }
+          const row = spawn as Record<string, unknown>;
+          return row.bestiaryAnimaId !== id;
+        });
+        if (nextEnemySpawns.length === map.enemySpawns.length) {
+          continue;
+        }
+        await transaction.gameMap.update({
+          where: { id: map.id },
+          data: {
+            enemySpawns: nextEnemySpawns,
+          },
+        });
+      }
+
+      await transaction.bestiaryAnima.delete({
+        where: { id },
+      });
     });
   }
 }

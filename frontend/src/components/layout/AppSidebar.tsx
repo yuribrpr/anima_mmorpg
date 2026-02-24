@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import { useMemo } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { ChevronRight, Compass, FolderCog, LogOut, Shield, Sparkles, Swords, Package, Users, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Compass, FolderCog, Ghost, LogOut, Package, Shield, SlidersHorizontal, Sparkles, Swords, Users, Map as MapIcon } from "lucide-react";
 import type { UserRole } from "@/types/auth";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -27,6 +27,18 @@ const mainItems: NavItem[] = [
   { label: "Adocao", icon: Sparkles, to: "/app/adocao" },
 ];
 
+const adminWorldItems: NavItem[] = [
+  { label: "Mapas", icon: MapIcon, to: "/app/admin/mapas" },
+  { label: "Bestiario", icon: Ghost, to: "/app/admin/bestiario" },
+  { label: "NPCs", icon: Users, to: "/app/admin/npcs" },
+];
+
+const adminDataItems: NavItem[] = [
+  { label: "Animas", icon: Sparkles, to: "/app/admin/animas" },
+  { label: "Itens", icon: Package, to: "/app/admin/itens" },
+  { label: "Variaveis Globais", icon: SlidersHorizontal, to: "/app/admin/variaveis-globais" },
+];
+
 const SidebarPanel = ({ username, userRole, onLogout, className }: SidebarProps & { className?: string }) => {
   const location = useLocation();
   const adminOpen = useMemo(() => location.pathname.startsWith("/app/admin"), [location.pathname]);
@@ -44,9 +56,30 @@ const SidebarPanel = ({ username, userRole, onLogout, className }: SidebarProps 
       <Separator className="mb-4" />
 
       <nav className="space-y-1">
-        {mainItems.map((item) => {
+        <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Jogo</div>
+        {mainItems.slice(0, 2).map((item) => {
           const Icon = item.icon;
+          return (
+            <Button
+              key={item.label}
+              asChild
+              variant="ghost"
+              className={cn(
+                "w-full justify-start gap-2 text-muted-foreground",
+                location.pathname === item.to ? "bg-muted text-foreground" : undefined,
+              )}
+            >
+              <NavLink to={item.to}>
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </NavLink>
+            </Button>
+          );
+        })}
 
+        <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Colecao</div>
+        {mainItems.slice(2).map((item) => {
+          const Icon = item.icon;
           return (
             <Button
               key={item.label}
@@ -75,75 +108,47 @@ const SidebarPanel = ({ username, userRole, onLogout, className }: SidebarProps 
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="ml-6 mt-1 space-y-1">
-              <Button
-                asChild
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start text-muted-foreground",
-                  location.pathname === "/app/admin/mapas" ? "bg-muted text-foreground" : undefined,
-                )}
-              >
-                <NavLink to="/app/admin/mapas">Mapas</NavLink>
-              </Button>
-              <Button
-                asChild
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start text-muted-foreground",
-                  location.pathname === "/app/admin/animas" ? "bg-muted text-foreground" : undefined,
-                )}
-              >
-                <NavLink to="/app/admin/animas">Animas</NavLink>
-              </Button>
-              <Button
-                asChild
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start text-muted-foreground",
-                  location.pathname === "/app/admin/bestiario" ? "bg-muted text-foreground" : undefined,
-                )}
-              >
-                <NavLink to="/app/admin/bestiario">Bestiario</NavLink>
-              </Button>
-              <Button
-                asChild
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start text-muted-foreground",
-                  location.pathname === "/app/admin/itens" ? "bg-muted text-foreground" : undefined,
-                )}
-              >
-                <NavLink to="/app/admin/itens" className="inline-flex items-center gap-2">
-                  <Package className="h-3.5 w-3.5" />
-                  Itens
-                </NavLink>
-              </Button>
-              <Button
-                asChild
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start text-muted-foreground",
-                  location.pathname === "/app/admin/npcs" ? "bg-muted text-foreground" : undefined,
-                )}
-              >
-                <NavLink to="/app/admin/npcs" className="inline-flex items-center gap-2">
-                  <Users className="h-3.5 w-3.5" />
-                  NPCs
-                </NavLink>
-              </Button>
-              <Button
-                asChild
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start text-muted-foreground",
-                  location.pathname === "/app/admin/variaveis-globais" ? "bg-muted text-foreground" : undefined,
-                )}
-              >
-                <NavLink to="/app/admin/variaveis-globais" className="inline-flex items-center gap-2">
-                  <SlidersHorizontal className="h-3.5 w-3.5" />
-                  Variaveis Globais
-                </NavLink>
-              </Button>
+              <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Mundo</div>
+              {adminWorldItems.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Button
+                    key={item.label}
+                    asChild
+                    variant="ghost"
+                    className={cn(
+                      "w-full justify-start text-muted-foreground",
+                      location.pathname === item.to ? "bg-muted text-foreground" : undefined,
+                    )}
+                  >
+                    <NavLink to={item.to} className="inline-flex items-center gap-2">
+                      <Icon className="h-3.5 w-3.5" />
+                      {item.label}
+                    </NavLink>
+                  </Button>
+                );
+              })}
+
+              <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Dados</div>
+              {adminDataItems.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Button
+                    key={item.label}
+                    asChild
+                    variant="ghost"
+                    className={cn(
+                      "w-full justify-start text-muted-foreground",
+                      location.pathname === item.to ? "bg-muted text-foreground" : undefined,
+                    )}
+                  >
+                    <NavLink to={item.to} className="inline-flex items-center gap-2">
+                      <Icon className="h-3.5 w-3.5" />
+                      {item.label}
+                    </NavLink>
+                  </Button>
+                );
+              })}
             </CollapsibleContent>
           </Collapsible>
         ) : null}

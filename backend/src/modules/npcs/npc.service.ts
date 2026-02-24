@@ -733,23 +733,31 @@ export class NpcService {
     return this.listActiveQuestsTx(transaction, userId);
   }
 
-  private async resolveCurrentMapWithNpcPlacements(userId: string): Promise<PlacementNpc[]> {
-    const latestState = await prisma.playerMapState.findFirst({
-      where: { userId },
-      orderBy: { updatedAt: "desc" },
-      select: { mapId: true },
-    });
-
-    const map = latestState
+  private async resolveCurrentMapWithNpcPlacements(userId: string, mapId?: string): Promise<PlacementNpc[]> {
+    const resolvedMapId = normalizeString(mapId);
+    const map = resolvedMapId
       ? await prisma.gameMap.findUnique({
-          where: { id: latestState.mapId },
+          where: { id: resolvedMapId },
           select: { npcPlacements: true },
         })
-      : await prisma.gameMap.findFirst({
-          where: { isActive: true },
-          orderBy: { updatedAt: "desc" },
-          select: { npcPlacements: true },
-        });
+      : await (async () => {
+          const latestState = await prisma.playerMapState.findFirst({
+            where: { userId },
+            orderBy: { updatedAt: "desc" },
+            select: { mapId: true },
+          });
+          if (latestState) {
+            return prisma.gameMap.findUnique({
+              where: { id: latestState.mapId },
+              select: { npcPlacements: true },
+            });
+          }
+          return prisma.gameMap.findFirst({
+            where: { isActive: true },
+            orderBy: { updatedAt: "desc" },
+            select: { npcPlacements: true },
+          });
+        })();
 
     if (!map || !Array.isArray(map.npcPlacements)) {
       return [];
@@ -792,8 +800,8 @@ export class NpcService {
     }));
   }
 
-  async listActiveMapNpcs(userId: string) {
-    return this.resolveCurrentMapWithNpcPlacements(userId);
+  async listActiveMapNpcs(userId: string, mapId?: string) {
+    return this.resolveCurrentMapWithNpcPlacements(userId, mapId);
   }
 
   async listPlayerQuests(userId: string) {

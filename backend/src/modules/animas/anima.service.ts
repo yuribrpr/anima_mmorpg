@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { AppError } from "../../lib/errors";
 import { prisma } from "../../config/prisma";
 import { CreateAnimaInput, UpdateAnimaInput } from "../../types/anima";
@@ -39,7 +40,64 @@ export class AnimaService {
       throw new AppError(404, "ANIMA_NOT_FOUND", "Anima not found");
     }
 
-    await this.animaRepository.delete(id);
+    try {
+      await prisma.$transaction(async (tx) => {
+        const adoptedUsingAnima = await tx.adoptedAnima.findMany({
+          where: { baseAnimaId: id },
+          select: {
+            userId: true,
+            isPrimary: true,
+          },
+        });
+
+        if (adoptedUsingAnima.length > 0) {
+          await tx.adoptedAnima.deleteMany({
+            where: { baseAnimaId: id },
+          });
+
+          const usersWithDeletedPrimary = [...new Set(adoptedUsingAnima.filter((entry) => entry.isPrimary).map((entry) => entry.userId))];
+
+          for (const userId of usersWithDeletedPrimary) {
+            const hasPrimary = await tx.adoptedAnima.findFirst({
+              where: { userId, isPrimary: true },
+              select: { id: true },
+            });
+            if (hasPrimary) {
+              continue;
+            }
+
+            const fallback = await tx.adoptedAnima.findFirst({
+              where: { userId },
+              orderBy: { createdAt: "asc" },
+              select: { id: true },
+            });
+            if (!fallback) {
+              continue;
+            }
+
+            await tx.adoptedAnima.update({
+              where: { id: fallback.id },
+              data: { isPrimary: true },
+            });
+          }
+        }
+      });
+
+      await this.animaRepository.delete(id);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === "P2025") {
+          throw new AppError(404, "ANIMA_NOT_FOUND", "Anima not found");
+        }
+        if (error.code === "P2003" || error.code === "P2014") {
+          throw new AppError(409, "ANIMA_IN_USE", "Anima is in use and cannot be deleted", {
+            prismaCode: error.code,
+            constraint: error.meta?.constraint,
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   private async prepareCreateOrUpdateData(input: CreateAnimaInput, currentAnimaId: string | null) {

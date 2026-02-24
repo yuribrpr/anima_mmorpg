@@ -41,8 +41,9 @@ export const deleteNpc = async (id: string) => {
   });
 };
 
-export const listActiveMapNpcs = async () => {
-  const response = await apiRequest<{ npcs: ActiveMapNpc[] }>("/npcs/mapa-ativo", {
+export const listActiveMapNpcs = async (mapId?: string) => {
+  const suffix = mapId ? `?mapId=${encodeURIComponent(mapId)}` : "";
+  const response = await apiRequest<{ npcs: ActiveMapNpc[] }>(`/npcs/mapa-ativo${suffix}`, {
     method: "GET",
   });
 

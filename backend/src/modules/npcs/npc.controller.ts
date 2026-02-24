@@ -22,7 +22,8 @@ export class NpcController {
         throw new AppError(401, "UNAUTHORIZED", "Authentication required");
       }
 
-      const npcs = await this.npcService.listActiveMapNpcs(request.authUserId);
+      const mapId = typeof request.query.mapId === "string" ? request.query.mapId : undefined;
+      const npcs = await this.npcService.listActiveMapNpcs(request.authUserId, mapId);
       response.status(200).json({ npcs });
     } catch (error) {
       next(error);

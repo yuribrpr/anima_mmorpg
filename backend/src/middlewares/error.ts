@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 import { AppError } from "../lib/errors";
@@ -20,6 +21,47 @@ export const errorMiddleware = (error: unknown, _request: Request, response: Res
         code: "VALIDATION_ERROR",
         message: "Invalid request payload",
         details: error.issues,
+      },
+    });
+    return;
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2003") {
+      response.status(409).json({
+        error: {
+          code: "RESOURCE_IN_USE",
+          message: "Resource is in use and cannot be deleted",
+        },
+      });
+      return;
+    }
+    if (error.code === "P2025") {
+      response.status(404).json({
+        error: {
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        },
+      });
+      return;
+    }
+  }
+
+  if (error instanceof Prisma.PrismaClientUnknownRequestError) {
+    response.status(500).json({
+      error: {
+        code: "DATABASE_REQUEST_ERROR",
+        message: "Database request failed",
+      },
+    });
+    return;
+  }
+
+  if (error instanceof Prisma.PrismaClientValidationError) {
+    response.status(400).json({
+      error: {
+        code: "DATABASE_VALIDATION_ERROR",
+        message: "Invalid database request",
       },
     });
     return;
@@ -56,6 +98,8 @@ export const errorMiddleware = (error: unknown, _request: Request, response: Res
     });
     return;
   }
+
+  console.error("[errorMiddleware] Unhandled error", error);
 
   response.status(500).json({
     error: {

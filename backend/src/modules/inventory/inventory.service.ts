@@ -151,11 +151,13 @@ export class InventoryService {
       throw new AppError(400, "PRIMARY_ANIMA_REQUIRED", "A primary adopted anima is required to use consumables");
     }
 
-    const totalMaxHpAfter = primaryAnima.baseAnima.maxHp + primaryAnima.bonusMaxHp + bonusMaxHpAdded;
+    const totalMaxHpBefore = primaryAnima.baseAnima.maxHp + primaryAnima.bonusMaxHp;
+    const totalMaxHpAfter = totalMaxHpBefore + bonusMaxHpAdded;
     const healedPerUse =
-      inventoryEntry.item.healPercentMaxHp > 0 ? Math.round((inventoryEntry.item.healPercentMaxHp / 100) * totalMaxHpAfter) : 0;
-    const healedHp = healedPerUse * quantity;
-    const nextCurrentHp = Math.min(totalMaxHpAfter, primaryAnima.currentHp + healedHp);
+      inventoryEntry.item.healPercentMaxHp > 0 ? Math.round((inventoryEntry.item.healPercentMaxHp / 100) * totalMaxHpBefore) : 0;
+    const requestedHeal = healedPerUse * quantity;
+    const nextCurrentHp = Math.min(totalMaxHpAfter, primaryAnima.currentHp + requestedHeal);
+    const healedHp = Math.max(0, nextCurrentHp - primaryAnima.currentHp);
 
     await prisma.adoptedAnima.update({
       where: { id: primaryAnima.id },

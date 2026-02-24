@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 type MapPresenceEntry = {
   mapId: string;
@@ -851,67 +852,83 @@ export const AdminBestiarioPage = () => {
         </DialogContent>
       </Dialog>
 
-      <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6">
-        {!loading && filteredAnimas.length === 0 ? (
-          <Card className="col-span-full">
-            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              Nenhum inimigo encontrado com os filtros atuais.
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {filteredAnimas.map((anima) => {
-          const presence = mapPresenceByAnima.get(anima.id) ?? [];
-          return (
-            <Card key={anima.id} className="group border-border/70 bg-card/70 transition hover:border-primary/60 hover:shadow-md">
-              <button type="button" className="w-full text-left" onClick={() => openAnimaModal(anima, "details")}>
-                <div className="flex items-center gap-3 p-3">
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border bg-muted/30">
-                    {anima.imageData ? (
-                      <img
-                        src={anima.imageData}
-                        alt={anima.name}
-                        className="h-14 w-14 object-contain transition duration-200 group-hover:scale-105"
-                        style={{ transform: anima.flipHorizontal ? "scaleX(-1)" : "scaleX(1)", imageRendering: "pixelated" }}
-                      />
-                    ) : (
-                      <div className="h-12 w-12 rounded border bg-muted" />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-sm font-semibold">{anima.name}</p>
-                      <Badge variant="secondary" className="text-[10px]">
-                        {powerLabel(anima.powerLevel)}
-                      </Badge>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">ATK {anima.attack} . DEF {anima.defense} . HP {anima.maxHp}</p>
-                    <div className="flex flex-wrap gap-1">
-                      <Badge variant="outline" className="text-[10px]">
-                        {anima.drops.length} drops
-                      </Badge>
-                      <Badge variant="outline" className="text-[10px]">
-                        {presence.length} mapas
-                      </Badge>
-                      <Badge variant="outline" className="text-[10px]">
-                        {invertLabel(anima.flipHorizontal)}
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-              </button>
-              <CardContent className="flex items-center justify-end gap-2 px-3 pb-3 pt-0">
-                <Button variant="outline" size="sm" onClick={() => openAnimaModal(anima, "edit")}>
-                  <Pencil className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="destructive" size="sm" onClick={() => void handleDelete(anima)} disabled={deletingId === anima.id}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Inimigos</CardTitle>
+          <CardDescription>Visualizacao em tabela para edicao e exclusao rapida.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {!loading && filteredAnimas.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">Nenhum inimigo encontrado com os filtros atuais.</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Inimigo</TableHead>
+                  <TableHead>Poder</TableHead>
+                  <TableHead>ATK/DEF/HP</TableHead>
+                  <TableHead>Velocidade</TableHead>
+                  <TableHead>Drops</TableHead>
+                  <TableHead>Mapas</TableHead>
+                  <TableHead className="text-right">Acoes</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredAnimas.map((anima) => {
+                  const presence = mapPresenceByAnima.get(anima.id) ?? [];
+                  return (
+                    <TableRow key={anima.id}>
+                      <TableCell>
+                        <button type="button" className="flex items-center gap-3 text-left" onClick={() => openAnimaModal(anima, "details")}>
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border bg-muted/30">
+                            {anima.imageData ? (
+                              <img
+                                src={anima.imageData}
+                                alt={anima.name}
+                                className="h-10 w-10 object-contain"
+                                style={{ transform: anima.flipHorizontal ? "scaleX(-1)" : "scaleX(1)", imageRendering: "pixelated" }}
+                              />
+                            ) : (
+                              <div className="h-8 w-8 rounded border bg-muted" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">{anima.name}</p>
+                            <p className="text-xs text-muted-foreground">{invertLabel(anima.flipHorizontal)} . {anima.spriteScale.toFixed(1)}x</p>
+                          </div>
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">{powerLabel(anima.powerLevel)}</Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        ATK {anima.attack} . DEF {anima.defense} . HP {anima.maxHp}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {anima.attackSpeedSeconds.toFixed(2)}s . {anima.critChance.toFixed(1)}%
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {anima.drops.length} drops . {anima.bitsDrop} bits . {anima.xpDrop} xp
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{presence.length}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="inline-flex items-center gap-2">
+                          <Button variant="outline" size="sm" onClick={() => openAnimaModal(anima, "edit")}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="destructive" size="sm" onClick={() => void handleDelete(anima)} disabled={deletingId === anima.id}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
     </section>
   );
 };

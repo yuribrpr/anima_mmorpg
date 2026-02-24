@@ -46,7 +46,14 @@ export class BestiaryAnimaService {
       throw new AppError(404, "BESTIARY_ANIMA_NOT_FOUND", "Bestiary anima not found");
     }
 
-    await this.bestiaryAnimaRepository.delete(id);
+    try {
+      await this.bestiaryAnimaRepository.delete(id);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+        throw new AppError(409, "BESTIARY_ANIMA_IN_USE", "Bestiary anima is in use and cannot be deleted");
+      }
+      throw error;
+    }
   }
 
   private prepareCreateOrUpdateData(input: CreateBestiaryAnimaInput) {

@@ -1,15 +1,13 @@
 import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Backpack, ClipboardList, Coins, Lock, Maximize2, Minimize2, X } from "lucide-react";
+import { Backpack, Coins, Lock, Maximize2, Minimize2, Sparkles, Users, X } from "lucide-react";
 import { ApiError } from "@/lib/api";
-import { evolveAdoptedAnima, getAdoptedAnimaEvolutionChain, listAdoptedAnimas, regressAdoptedAnima } from "@/lib/adocoes";
+import { evolveAdoptedAnima, getAdoptedAnimaEvolutionChain, listAdoptedAnimas, regressAdoptedAnima, setPrimaryAdoptedAnima as setPrimaryAdoptedAnimaRequest } from "@/lib/adocoes";
 import { getUserInventory, updateInventoryHotbar, updateInventoryLayout, useInventoryItem } from "@/lib/inventario";
-import { listPlayerQuests } from "@/lib/npcs";
 import { cn } from "@/lib/utils";
 import type { AdoptedAnima, AdoptionEvolutionChain, EvolutionChainNode } from "@/types/adocao";
 import type { InventoryItem, InventoryItemLayout, UserInventory } from "@/types/inventario";
-import type { PlayerQuest } from "@/types/npc";
+import { AnimaStatsRadar, type RadarMetric } from "@/components/common/AnimaStatsRadar";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type BagCategory = "all" | "consumable" | "quest" | "normal";
 
@@ -33,6 +31,53 @@ const rarityByType: Record<InventoryItem["item"]["type"], string> = {
 };
 
 const HOTBAR_SLOT_COUNT = 9;
+const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+const formatSeconds = (value: number) => `${value.toFixed(2)}s`;
+const toSpeedScore = (seconds: number) => 1 / Math.max(seconds, 0.05);
+const toAnimaRadarMetrics = (anima: AdoptedAnima): RadarMetric[] => [
+  {
+    key: "attack",
+    label: "ATK",
+    value: anima.totalAttack,
+    max: Math.max(1, anima.baseAnima.attack * 2),
+    displayValue: anima.totalAttack.toString(),
+  },
+  {
+    key: "defense",
+    label: "DEF",
+    value: anima.totalDefense,
+    max: Math.max(1, anima.baseAnima.defense * 2),
+    displayValue: anima.totalDefense.toString(),
+  },
+  {
+    key: "hp",
+    label: "HP",
+    value: anima.totalMaxHp,
+    max: Math.max(1, anima.baseAnima.maxHp * 2),
+    displayValue: anima.totalMaxHp.toString(),
+  },
+  {
+    key: "speed",
+    label: "SPD",
+    value: toSpeedScore(anima.totalAttackSpeedSeconds),
+    max: toSpeedScore(0.2),
+    displayValue: formatSeconds(anima.totalAttackSpeedSeconds),
+  },
+  {
+    key: "crit",
+    label: "CRT",
+    value: anima.totalCritChance,
+    max: 100,
+    displayValue: formatPercent(anima.totalCritChance),
+  },
+  {
+    key: "agility",
+    label: "AGI",
+    value: anima.baseAnima.agility,
+    max: Math.max(1, anima.baseAnima.agility * 2),
+    displayValue: anima.baseAnima.agility.toString(),
+  },
+];
 
 const defaultInventory: UserInventory = {
   bits: 0,
@@ -108,12 +153,22 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   const [activeTab, setActiveTab] = useState<BagCategory>("all");
   const [selectedSlot, setSelectedSlot] = useState(0);
   const [windowOffset, setWindowOffset] = useState({ x: 0, y: 0 });
-  const [dragState, setDragState] = useState<{ active: boolean; pointerX: number; pointerY: number; originX: number; originY: number }>({
+  const [animaDetailsOffset, setAnimaDetailsOffset] = useState({ x: 0, y: 0 });
+  const [myAnimasOffset, setMyAnimasOffset] = useState({ x: 0, y: 0 });
+  const [dragState, setDragState] = useState<{
+    active: boolean;
+    pointerX: number;
+    pointerY: number;
+    originX: number;
+    originY: number;
+    target: "bag" | "currentAnima" | "myAnimas";
+  }>({
     active: false,
     pointerX: 0,
     pointerY: 0,
     originX: 0,
     originY: 0,
+    target: "bag",
   });
   const [dragItemIndex, setDragItemIndex] = useState<number | null>(null);
   const [inventory, setInventory] = useState<UserInventory>(defaultInventory);
@@ -122,17 +177,15 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   const [isSavingLayout, setIsSavingLayout] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isUsingItem, setIsUsingItem] = useState(false);
-  const [isQuestOpen, setIsQuestOpen] = useState(false);
-  const [activeQuests, setActiveQuests] = useState<PlayerQuest[]>([]);
-  const [completedQuests, setCompletedQuests] = useState<PlayerQuest[]>([]);
-  const [questLoading, setQuestLoading] = useState(false);
-  const [questErrorMessage, setQuestErrorMessage] = useState<string | null>(null);
+  const [isAnimaDetailsOpen, setIsAnimaDetailsOpen] = useState(false);
+  const [isMyAnimasOpen, setIsMyAnimasOpen] = useState(false);
   const [cooldownItemId, setCooldownItemId] = useState<string | null>(null);
-  const [useDialogItem, setUseDialogItem] = useState<InventoryItem | null>(null);
-  const [useDialogQuantity, setUseDialogQuantity] = useState<string>("1");
-  const [useDialogSubmitting, setUseDialogSubmitting] = useState(false);
   const [hotbarSlots, setHotbarSlots] = useState<(string | null)[]>(() => getDefaultHotbar());
+  const [adoptedAnimas, setAdoptedAnimas] = useState<AdoptedAnima[]>([]);
   const [primaryAdoptedAnima, setPrimaryAdoptedAnima] = useState<AdoptedAnima | null>(null);
+  const [selectingPrimaryId, setSelectingPrimaryId] = useState<string | null>(null);
+  const [hoveredAnimaId, setHoveredAnimaId] = useState<string | null>(null);
+  const [hoverCardPosition, setHoverCardPosition] = useState({ x: 0, y: 0 });
   const [evolutionChain, setEvolutionChain] = useState<AdoptionEvolutionChain | null>(null);
   const [evolutionSubmitting, setEvolutionSubmitting] = useState(false);
 
@@ -239,6 +292,29 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
     return [...left, ...right];
   }, [evolutionChain, primaryAdoptedAnima]);
 
+  const hoveredAnima = useMemo(
+    () => (hoveredAnimaId ? adoptedAnimas.find((anima) => anima.id === hoveredAnimaId) ?? null : null),
+    [adoptedAnimas, hoveredAnimaId],
+  );
+  const hoveredAnimaMetrics = useMemo(() => (hoveredAnima ? toAnimaRadarMetrics(hoveredAnima) : []), [hoveredAnima]);
+  const primaryAnimaMetrics = useMemo(() => (primaryAdoptedAnima ? toAnimaRadarMetrics(primaryAdoptedAnima) : []), [primaryAdoptedAnima]);
+  const hoverCardStyle = useMemo(() => {
+    let left = hoverCardPosition.x + 8;
+    let top = hoverCardPosition.y;
+    if (typeof window !== "undefined") {
+      const cardWidth = 420;
+      const cardHeight = 290;
+      const margin = 12;
+      if (left + cardWidth + margin > window.innerWidth) {
+        left = Math.max(margin, hoverCardPosition.x - cardWidth - 8);
+      }
+      if (top + cardHeight + margin > window.innerHeight) {
+        top = Math.max(margin, window.innerHeight - cardHeight - margin);
+      }
+    }
+    return { left, top };
+  }, [hoverCardPosition]);
+
   const assignItemToHotbar = useCallback(async (targetIndex: number, itemId: string | null) => {
     if (targetIndex < 0 || targetIndex >= HOTBAR_SLOT_COUNT) {
       return;
@@ -289,27 +365,10 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
     }
   }, []);
 
-  const loadQuests = useCallback(async () => {
-    setQuestLoading(true);
-    try {
-      const quests = await listPlayerQuests();
-      setActiveQuests(quests.activeQuests);
-      setCompletedQuests(quests.completedQuests);
-      setQuestErrorMessage(null);
-    } catch (error) {
-      if (error instanceof ApiError) {
-        setQuestErrorMessage(error.message);
-      } else {
-        setQuestErrorMessage("Falha ao carregar quests.");
-      }
-    } finally {
-      setQuestLoading(false);
-    }
-  }, []);
-
   const loadPrimaryAdoptedAnima = useCallback(async () => {
     try {
       const animas = await listAdoptedAnimas();
+      setAdoptedAnimas(animas);
       const primary = animas.find((item) => item.isPrimary) ?? null;
       setPrimaryAdoptedAnima(primary);
       await syncEvolutionChain(primary);
@@ -322,6 +381,48 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
       }
     }
   }, [syncEvolutionChain]);
+
+  const handleSelectPrimaryAnima = useCallback(
+    async (nextPrimary: AdoptedAnima) => {
+      if (!nextPrimary || selectingPrimaryId || nextPrimary.isPrimary) {
+        return;
+      }
+      const previousPrimary = primaryAdoptedAnima;
+      setSelectingPrimaryId(nextPrimary.id);
+      try {
+        const updated = await setPrimaryAdoptedAnimaRequest(nextPrimary.id);
+        setAdoptedAnimas((current) =>
+          current.map((anima) =>
+            anima.id === updated.id ? { ...anima, ...updated, isPrimary: true } : { ...anima, isPrimary: false },
+          ),
+        );
+        setPrimaryAdoptedAnima(updated);
+        await syncEvolutionChain(updated);
+        window.dispatchEvent(new CustomEvent("adoption:changed"));
+        if (!previousPrimary || previousPrimary.id !== updated.id) {
+          window.dispatchEvent(
+            new CustomEvent("explore:anima-evolved", {
+              detail: {
+                action: "swapped",
+                from: previousPrimary ?? updated,
+                to: updated,
+              },
+            }),
+          );
+        }
+        setStatusMessage(`${updated.nickname} agora e o anima ativo.`);
+      } catch (error) {
+        if (error instanceof ApiError) {
+          setStatusMessage(error.message);
+        } else {
+          setStatusMessage("Falha ao trocar anima ativo.");
+        }
+      } finally {
+        setSelectingPrimaryId(null);
+      }
+    },
+    [primaryAdoptedAnima, selectingPrimaryId, syncEvolutionChain],
+  );
 
   const persistLayout = useCallback(
     async (nextSlots: (InventoryItem | null)[]) => {
@@ -357,14 +458,6 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   }, [loadInventory]);
 
   useEffect(() => {
-    const onQuestChanged = () => {
-      void loadQuests();
-    };
-    window.addEventListener("quest:changed", onQuestChanged as EventListener);
-    return () => window.removeEventListener("quest:changed", onQuestChanged as EventListener);
-  }, [loadQuests]);
-
-  useEffect(() => {
     const onAdoptionChanged = () => {
       void loadPrimaryAdoptedAnima();
     };
@@ -379,6 +472,27 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
       const tag = target?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || target?.isContentEditable) return;
 
+      if (event.key === "Escape") {
+        let closedAny = false;
+        if (isMyAnimasOpen) {
+          setIsMyAnimasOpen(false);
+          setHoveredAnimaId(null);
+          closedAny = true;
+        }
+        if (isAnimaDetailsOpen) {
+          setIsAnimaDetailsOpen(false);
+          closedAny = true;
+        }
+        if (isBagOpen) {
+          setIsBagOpen(false);
+          closedAny = true;
+        }
+        if (closedAny) {
+          event.preventDefault();
+        }
+        return;
+      }
+
       if (event.key.toLowerCase() === "i") {
         event.preventDefault();
         setIsBagOpen((current) => !current);
@@ -387,7 +501,7 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [isAnimaDetailsOpen, isBagOpen, isMyAnimasOpen]);
 
   useEffect(() => {
     if (!isBagOpen) {
@@ -407,15 +521,15 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
   }, [firstVisibleSlot, inventoryLoaded, isBagOpen, loadInventory, visibleSlots]);
 
   useEffect(() => {
-    if (!isQuestOpen) {
-      return;
-    }
-    void loadQuests();
-  }, [isQuestOpen, loadQuests]);
-
-  useEffect(() => {
     void loadPrimaryAdoptedAnima();
   }, [loadPrimaryAdoptedAnima]);
+
+  useEffect(() => {
+    if (!isAnimaDetailsOpen && !isMyAnimasOpen) {
+      return;
+    }
+    void loadPrimaryAdoptedAnima();
+  }, [isAnimaDetailsOpen, isMyAnimasOpen, loadPrimaryAdoptedAnima]);
 
   useEffect(() => {
     if (!dragState.active) return;
@@ -423,10 +537,19 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
     const handleMove = (event: PointerEvent) => {
       const deltaX = event.clientX - dragState.pointerX;
       const deltaY = event.clientY - dragState.pointerY;
-      setWindowOffset({
+      const nextOffset = {
         x: dragState.originX + deltaX,
         y: dragState.originY + deltaY,
-      });
+      };
+      if (dragState.target === "bag") {
+        setWindowOffset(nextOffset);
+        return;
+      }
+      if (dragState.target === "currentAnima") {
+        setAnimaDetailsOffset(nextOffset);
+        return;
+      }
+      setMyAnimasOffset(nextOffset);
     };
 
     const handleUp = () => {
@@ -441,14 +564,16 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
     };
   }, [dragState]);
 
-  const handleHeaderPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const handleHeaderPointerDown = (event: ReactPointerEvent<HTMLDivElement>, target: "bag" | "currentAnima" | "myAnimas") => {
     event.preventDefault();
+    const sourceOffset = target === "bag" ? windowOffset : target === "currentAnima" ? animaDetailsOffset : myAnimasOffset;
     setDragState({
       active: true,
       pointerX: event.clientX,
       pointerY: event.clientY,
-      originX: windowOffset.x,
-      originY: windowOffset.y,
+      originX: sourceOffset.x,
+      originY: sourceOffset.y,
+      target,
     });
   };
 
@@ -647,7 +772,7 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
         <div
           className={cn(
             "grid gap-2 rounded-2xl border border-slate-200/20 bg-gradient-to-br from-slate-950/92 via-slate-900/90 to-slate-950/92 p-2 shadow-[0_22px_48px_-22px_rgba(0,0,0,0.75)] backdrop-blur-xl",
-            showFocusToggle ? "grid-cols-3" : "grid-cols-2",
+            showFocusToggle ? "grid-cols-4" : "grid-cols-3",
           )}
         >
           <div className="flex min-w-[72px] flex-col items-center justify-center">
@@ -667,14 +792,27 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
             <Button
               type="button"
               size="icon"
-              variant={isQuestOpen ? "default" : "outline"}
+              variant={isAnimaDetailsOpen ? "default" : "outline"}
               className="mx-auto h-10 w-10 rounded-lg border-slate-300/20 bg-slate-900/55 text-slate-100 hover:bg-slate-900/75"
-              onClick={() => setIsQuestOpen((current) => !current)}
-              aria-label="Abrir lista de quests"
+              onClick={() => setIsAnimaDetailsOpen(true)}
+              aria-label="Abrir detalhes do anima atual"
             >
-              <ClipboardList className="h-5 w-5" />
+              <Sparkles className="h-5 w-5" />
             </Button>
-            <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Quests</p>
+            <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Anima Atual</p>
+          </div>
+          <div className="flex min-w-[72px] flex-col items-center justify-center">
+            <Button
+              type="button"
+              size="icon"
+              variant={isMyAnimasOpen ? "default" : "outline"}
+              className="mx-auto h-10 w-10 rounded-lg border-slate-300/20 bg-slate-900/55 text-slate-100 hover:bg-slate-900/75"
+              onClick={() => setIsMyAnimasOpen(true)}
+              aria-label="Abrir meus animas"
+            >
+              <Users className="h-5 w-5" />
+            </Button>
+            <p className="mt-1 text-center text-[10px] leading-tight text-muted-foreground">Meus Animas</p>
           </div>
           {showFocusToggle ? (
             <div className="flex min-w-[72px] flex-col items-center justify-center">
@@ -815,7 +953,7 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
           <div className="w-[540px] max-w-[min(94vw,540px)] overflow-hidden rounded-2xl border border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 shadow-[0_26px_52px_-22px_rgba(0,0,0,0.82)] backdrop-blur-xl">
             <div
               className="flex cursor-move items-center justify-between border-b border-slate-300/20 bg-slate-900/70 px-3 py-2"
-              onPointerDown={handleHeaderPointerDown}
+              onPointerDown={(event) => handleHeaderPointerDown(event, "bag")}
             >
               <p className="text-sm font-semibold text-slate-100">Bag</p>
               <Button
@@ -878,8 +1016,8 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
                       onContextMenu={(event) => {
                         if (!visibleItem || isLocked || visibleItem.item.type !== "CONSUMIVEL") return;
                         event.preventDefault();
-                        setUseDialogItem(visibleItem);
-                        setUseDialogQuantity("1");
+                        if (isUsingItem || cooldownItemId === visibleItem.itemId) return;
+                        void handleUseItem(visibleItem, 1);
                       }}
                       onDragStart={(event) => {
                         if (!draggable) return;
@@ -950,124 +1088,156 @@ export const FloatingBagMenu = ({ embedded = false, focusMode = false, onToggleF
         </div>
       ) : null}
 
-      <Dialog open={isQuestOpen} onOpenChange={setIsQuestOpen}>
-        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Quests</DialogTitle>
-            <DialogDescription className="text-slate-300">Lista completa das quests ativas e finalizadas.</DialogDescription>
-          </DialogHeader>
-
-          {questErrorMessage ? <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{questErrorMessage}</p> : null}
-          {questLoading ? <p className="text-sm text-muted-foreground">Carregando quests...</p> : null}
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <p className="text-sm font-semibold">Ativas ({activeQuests.length}/3)</p>
-              <div className="max-h-[32vh] space-y-2 overflow-y-auto pr-1">
-                {activeQuests.length === 0 ? <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-xs text-slate-400">Sem quests ativas.</p> : null}
-                {activeQuests.map((quest) => (
-                  <div key={quest.id} className="rounded-md border border-slate-200/20 bg-slate-900/45 p-3">
-                    <p className="text-sm font-medium">{quest.title}</p>
-                    <p className="text-xs text-slate-300">{quest.description}</p>
-                    <div className="mt-2 space-y-1">
-                      {quest.objectives.map((objective) => (
-                        <p key={objective.id} className="text-xs text-slate-200">
-                          {objective.type === "TALK"
-                            ? `Falar com ${objective.npcName ?? objective.npcId}: ${objective.current}/${objective.required}`
-                            : objective.type === "KILL"
-                              ? `Matar ${objective.bestiaryName ?? objective.bestiaryAnimaId}: ${objective.current}/${objective.required}`
-                              : `Dropar ${objective.itemName ?? objective.itemId}: ${objective.current}/${objective.required}`}
-                        </p>
-                      ))}
+      {isAnimaDetailsOpen ? (
+        <div
+          className={cn(embedded ? "absolute bottom-20 left-4 z-30" : "fixed bottom-24 left-5 z-50")}
+          style={{ transform: `translate3d(${animaDetailsOffset.x}px, ${animaDetailsOffset.y}px, 0)` }}
+        >
+          <div className="w-[620px] max-w-[min(94vw,620px)] overflow-hidden rounded-2xl border border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 shadow-[0_26px_52px_-22px_rgba(0,0,0,0.82)] backdrop-blur-xl">
+            <div
+              className="flex cursor-move items-center justify-between border-b border-slate-300/20 bg-slate-900/70 px-3 py-2"
+              onPointerDown={(event) => handleHeaderPointerDown(event, "currentAnima")}
+            >
+              <p className="text-sm font-semibold text-slate-100">Detalhes do anima atual</p>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={() => setIsAnimaDetailsOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto p-3">
+              {!primaryAdoptedAnima ? (
+                <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-sm text-slate-300">Defina um anima principal para visualizar os detalhes.</p>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid gap-3 rounded-lg border border-slate-200/20 bg-slate-900/45 p-3 sm:grid-cols-[96px_1fr]">
+                    <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-slate-200/20 bg-slate-950/55">
+                      {primaryAdoptedAnima.baseAnima.imageData ? (
+                        <img src={primaryAdoptedAnima.baseAnima.imageData} alt={primaryAdoptedAnima.baseAnima.name} className="h-full w-full object-contain p-1" />
+                      ) : (
+                        <span className="text-xs text-slate-500">Sem sprite</span>
+                      )}
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <p className="truncate text-base font-semibold text-slate-100">{primaryAdoptedAnima.nickname}</p>
+                      <p className="truncate text-xs text-slate-400">{primaryAdoptedAnima.baseAnima.name}</p>
+                      <p className="text-xs text-slate-300">Nivel {primaryAdoptedAnima.level} | XP {primaryAdoptedAnima.experience}/{primaryAdoptedAnima.experienceMax}</p>
+                      <p className="text-xs text-slate-300">HP {Math.max(0, Math.round(primaryAdoptedAnima.currentHp))}/{primaryAdoptedAnima.totalMaxHp}</p>
                     </div>
                   </div>
-                ))}
-              </div>
+                  <AnimaStatsRadar metrics={primaryAnimaMetrics} title="Radar de status" className="border-slate-200/20 bg-slate-900/45" />
+                </div>
+              )}
             </div>
+          </div>
+        </div>
+      ) : null}
 
-            <div className="space-y-2">
-              <p className="text-sm font-semibold">Concluidas</p>
-              <div className="max-h-[24vh] space-y-2 overflow-y-auto pr-1">
-                {completedQuests.length === 0 ? <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-xs text-slate-400">Nenhuma quest concluida.</p> : null}
-                {completedQuests.map((quest) => (
-                  <div key={quest.id} className="rounded-md border border-slate-200/20 bg-slate-900/45 p-3">
-                    <p className="text-sm font-medium">{quest.title}</p>
-                    <p className="text-xs text-slate-300">{quest.description}</p>
+      {isMyAnimasOpen ? (
+        <>
+          <div
+          className={cn(embedded ? "absolute bottom-20 left-20 z-30" : "fixed bottom-24 left-24 z-50")}
+          style={{ transform: `translate3d(${myAnimasOffset.x}px, ${myAnimasOffset.y}px, 0)` }}
+        >
+          <div className="w-[680px] max-w-[min(94vw,680px)] overflow-hidden rounded-2xl border border-slate-200/20 bg-gradient-to-br from-slate-950/88 via-slate-900/86 to-slate-950/88 shadow-[0_26px_52px_-22px_rgba(0,0,0,0.82)] backdrop-blur-xl">
+            <div
+              className="flex cursor-move items-center justify-between border-b border-slate-300/20 bg-slate-900/70 px-3 py-2"
+              onPointerDown={(event) => handleHeaderPointerDown(event, "myAnimas")}
+            >
+              <p className="text-sm font-semibold text-slate-100">Meus Animas</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                onClick={() => {
+                  setIsMyAnimasOpen(false);
+                  setHoveredAnimaId(null);
+                }}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto p-3">
+              {adoptedAnimas.length === 0 ? (
+                <p className="rounded-md border border-slate-200/20 bg-slate-900/45 px-3 py-2 text-sm text-slate-300">Nenhum anima adotado ainda.</p>
+              ) : (
+                <div className="relative">
+                  <div className="grid max-h-[60vh] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                    {adoptedAnimas.map((anima) => {
+                      const isActive = anima.isPrimary;
+                      const isSelecting = selectingPrimaryId === anima.id;
+                      return (
+                        <button
+                          key={anima.id}
+                          type="button"
+                          disabled={isSelecting || (Boolean(selectingPrimaryId) && !isActive)}
+                          className={cn(
+                            "group rounded-xl border px-3 py-2 text-left transition",
+                            isActive
+                              ? "border-emerald-300/45 bg-emerald-500/10"
+                              : "border-slate-300/20 bg-slate-900/45 hover:border-slate-100/35 hover:bg-slate-900/62",
+                            isSelecting ? "opacity-80" : undefined,
+                          )}
+                          onClick={() => void handleSelectPrimaryAnima(anima)}
+                          onMouseEnter={(event) => {
+                            setHoveredAnimaId(anima.id);
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            setHoverCardPosition({ x: rect.right, y: rect.top });
+                          }}
+                          onMouseMove={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            setHoverCardPosition({ x: rect.right, y: rect.top });
+                          }}
+                          onMouseLeave={() => setHoveredAnimaId((current) => (current === anima.id ? null : current))}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-slate-200/20 bg-slate-950/60">
+                              {anima.baseAnima.imageData ? (
+                                <img src={anima.baseAnima.imageData} alt={anima.baseAnima.name} className="h-full w-full object-contain p-1" />
+                              ) : (
+                                <span className="text-[10px] text-slate-500">Sem sprite</span>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-sm font-semibold">{anima.nickname}</p>
+                                {isActive ? <span className="text-[10px] font-semibold text-emerald-300">Ativo</span> : null}
+                              </div>
+                              <p className="truncate text-[11px] text-slate-400">{anima.baseAnima.name}</p>
+                              <p className="text-[11px] text-slate-300">Nv {anima.level} | HP {Math.max(0, Math.round(anima.currentHp))}/{anima.totalMaxHp}</p>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
+                            <span>ATK {anima.totalAttack}</span>
+                            <span>DEF {anima.totalDefense}</span>
+                            <span>{isSelecting ? "Trocando..." : isActive ? "Em uso" : "Clique para usar"}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={Boolean(useDialogItem)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setUseDialogItem(null);
-            setUseDialogQuantity("1");
-            setUseDialogSubmitting(false);
-          }
-        }}
-      >
-        <DialogContent className="max-h-[70vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Usar item</DialogTitle>
-            <DialogDescription className="text-slate-300">
-              {useDialogItem ? `${useDialogItem.item.name} (x${useDialogItem.quantity})` : ""}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 text-xs text-slate-200">
-            <label className="flex flex-col gap-1">
-              <span>Quantidade para usar</span>
-              <input
-                type="number"
-                min={1}
-                max={useDialogItem?.quantity ?? 1}
-                value={useDialogQuantity}
-                onChange={(event) => setUseDialogQuantity(event.target.value)}
-                className="h-8 rounded-md border border-slate-700 bg-slate-950/70 px-2 text-xs text-slate-100 outline-none focus:border-slate-300"
-              />
-              {useDialogItem ? (
-                <span className="text-[10px] text-slate-400">
-                  Disponivel: {useDialogItem.quantity.toLocaleString("pt-BR")}
-                </span>
-              ) : null}
-            </label>
-          </div>
-          <DialogFooter className="gap-2 sm:gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              className="border-slate-200/20 bg-slate-900/45 text-slate-200 hover:bg-slate-900/62"
-              disabled={useDialogSubmitting}
-              onClick={() => {
-                setUseDialogItem(null);
-                setUseDialogQuantity("1");
-              }}
-            >
-              Cancelar
-            </Button>
-            <Button
-              type="button"
-              disabled={useDialogSubmitting || !useDialogItem}
-              onClick={async () => {
-                if (!useDialogItem) return;
-                const value = Number(useDialogQuantity) || 0;
-                if (value <= 0) return;
-                setUseDialogSubmitting(true);
-                await handleUseItem(useDialogItem, value);
-                setUseDialogSubmitting(false);
-                setUseDialogItem(null);
-                setUseDialogQuantity("1");
-              }}
-            >
-              Confirmar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+          {hoveredAnima ? (
+            <div className="pointer-events-none fixed z-[90] w-[420px] rounded-xl border border-slate-200/25 bg-slate-950/80 p-2 shadow-[0_20px_50px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl" style={hoverCardStyle}>
+              <div className="mb-2 flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200/20 bg-slate-900/65">
+                  {hoveredAnima.baseAnima.imageData ? (
+                    <img src={hoveredAnima.baseAnima.imageData} alt={hoveredAnima.baseAnima.name} className="h-full w-full object-contain p-1" />
+                  ) : null}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-slate-100">{hoveredAnima.nickname}</p>
+                  <p className="truncate text-[11px] text-slate-400">Nivel {hoveredAnima.level} | {hoveredAnima.baseAnima.name}</p>
+                </div>
+              </div>
+              <AnimaStatsRadar metrics={hoveredAnimaMetrics} title="Detalhes do anima" size={180} className="border-slate-200/15 bg-slate-900/40 p-2" />
+            </div>
+          ) : null}
+        </>
+      ) : null}
     </>
   );
 };

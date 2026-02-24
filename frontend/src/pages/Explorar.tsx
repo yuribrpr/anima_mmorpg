@@ -255,7 +255,7 @@ type NpcInteractionQuestEntry = {
 
 type EvolutionVfxState = {
   active: boolean;
-  tone: "evolved" | "regressed";
+  tone: "evolved" | "regressed" | "swapped";
 };
 
 const getDataUrlMime = (dataUrl: string) => {
@@ -410,6 +410,14 @@ const getQuestObjectiveLabel = (objective: PlayerQuest["objectives"][number]) =>
     return `Derrotar ${objective.bestiaryName ?? objective.bestiaryAnimaId}`;
   }
   return `Coletar ${objective.itemName ?? objective.itemId}`;
+};
+
+const truncateQuestDescription = (value: string, max = 40) => {
+  const text = value.trim();
+  if (text.length <= max) {
+    return text;
+  }
+  return `${text.slice(0, max)}...`;
 };
 
 const pickRandom = <T,>(items: T[]) => {
@@ -759,7 +767,6 @@ export const ExplorarPage = () => {
   const [itemCatalog, setItemCatalog] = useState<Map<string, Item>>(new Map());
   const [activeQuests, setActiveQuests] = useState<PlayerQuest[]>([]);
   const [completedQuests, setCompletedQuests] = useState<PlayerQuest[]>([]);
-  const [questDetail, setQuestDetail] = useState<PlayerQuest | null>(null);
   const [questLoading, setQuestLoading] = useState(false);
   const [npcConversationSubmitting, setNpcConversationSubmitting] = useState(false);
   const [questHudOffset, setQuestHudOffset] = useState({ x: 0, y: 0 });
@@ -773,6 +780,7 @@ export const ExplorarPage = () => {
     startOffsetX: number;
     startOffsetY: number;
   } | null>(null);
+  const activeNpcRequestRef = useRef(0);
 
   useEffect(() => {
     portalPromptRef.current = portalPrompt;
@@ -804,7 +812,7 @@ export const ExplorarPage = () => {
     const onAnimaEvolved = (
       event: Event & {
         detail?: {
-          action?: "evolved" | "regressed";
+          action?: "evolved" | "regressed" | "swapped";
           from: AdoptedAnima;
           to: AdoptedAnima;
         };
@@ -814,7 +822,7 @@ export const ExplorarPage = () => {
       if (!detail?.to) {
         return;
       }
-      const tone = detail.action === "regressed" ? "regressed" : "evolved";
+      const tone = detail.action === "regressed" ? "regressed" : detail.action === "swapped" ? "swapped" : "evolved";
 
       const evolved = detail.to;
       playerRef.current.animaName = evolved.nickname?.trim() || evolved.baseAnima.name || "Anima";
@@ -838,7 +846,12 @@ export const ExplorarPage = () => {
         startedAt: now,
         ttlMs: 260,
         intensity: 0.62,
-        color: tone === "evolved" ? "rgba(103, 232, 249, 1)" : "rgba(251, 191, 36, 1)",
+        color:
+          tone === "evolved"
+            ? "rgba(103, 232, 249, 1)"
+            : tone === "swapped"
+              ? "rgba(96, 165, 250, 1)"
+              : "rgba(251, 191, 36, 1)",
       };
       cameraShakeRef.current = {
         startedAt: now,
@@ -853,7 +866,7 @@ export const ExplorarPage = () => {
         y: centerY,
         createdAt: now,
         ttlMs: 760,
-        color: tone === "evolved" ? "rgba(34, 211, 238, 1)" : "rgba(251, 191, 36, 1)",
+        color: tone === "evolved" ? "rgba(34, 211, 238, 1)" : tone === "swapped" ? "rgba(96, 165, 250, 1)" : "rgba(251, 191, 36, 1)",
         critical: true,
       });
       impactRingsRef.current.push({
@@ -862,7 +875,8 @@ export const ExplorarPage = () => {
         y: centerY,
         createdAt: now + 90,
         ttlMs: 920,
-        color: tone === "evolved" ? "rgba(167, 243, 208, 1)" : "rgba(254, 215, 170, 1)",
+        color:
+          tone === "evolved" ? "rgba(167, 243, 208, 1)" : tone === "swapped" ? "rgba(191, 219, 254, 1)" : "rgba(254, 215, 170, 1)",
         critical: true,
       });
 
@@ -878,7 +892,12 @@ export const ExplorarPage = () => {
           createdAt: now,
           ttlMs: 760 + Math.floor(Math.random() * 280),
           size: 2.8 + Math.random() * 2.6,
-          color: tone === "evolved" ? "rgba(125, 211, 252, 0.95)" : "rgba(251, 191, 36, 0.95)",
+          color:
+            tone === "evolved"
+              ? "rgba(125, 211, 252, 0.95)"
+              : tone === "swapped"
+                ? "rgba(147, 197, 253, 0.95)"
+                : "rgba(251, 191, 36, 0.95)",
           glow: true,
           gravity: 0.03,
         });
@@ -901,7 +920,12 @@ export const ExplorarPage = () => {
           startedAt: performance.now(),
           ttlMs: 180,
           intensity: 0.38,
-          color: tone === "evolved" ? "rgba(103, 232, 249, 1)" : "rgba(251, 191, 36, 1)",
+          color:
+            tone === "evolved"
+              ? "rgba(103, 232, 249, 1)"
+              : tone === "swapped"
+                ? "rgba(96, 165, 250, 1)"
+                : "rgba(251, 191, 36, 1)",
         };
       }, 260);
       window.setTimeout(() => {
@@ -1615,9 +1639,14 @@ export const ExplorarPage = () => {
     }
   }, []);
 
-  const refreshActiveNpcs = useCallback(async () => {
+  const refreshActiveNpcs = useCallback(async (mapId?: string) => {
+    const requestId = activeNpcRequestRef.current + 1;
+    activeNpcRequestRef.current = requestId;
     try {
-      const npcs = await listActiveMapNpcs();
+      const npcs = await listActiveMapNpcs(mapId);
+      if (requestId !== activeNpcRequestRef.current) {
+        return;
+      }
       setActiveMapNpcs(npcs);
       const spriteMap = new Map<string, SpriteAsset>();
       for (const npc of npcs) {
@@ -1629,6 +1658,9 @@ export const ExplorarPage = () => {
       }
       npcSpriteMapRef.current = spriteMap;
     } catch (error) {
+      if (requestId !== activeNpcRequestRef.current) {
+        return;
+      }
       if (error instanceof ApiError) {
         setErrorMessage(error.message);
       } else {
@@ -1667,6 +1699,20 @@ export const ExplorarPage = () => {
   const completedQuestKeys = useMemo(() => {
     return new Set(completedQuests.map((quest) => quest.questKey));
   }, [completedQuests]);
+
+  const questHudEntries = useMemo(() => {
+    const activeEntries = activeQuests.map((quest) => ({
+      ...quest,
+      isCompleted: quest.status === "COMPLETED" || quest.objectives.every((objective) => objective.completed),
+      fromCompletedList: false,
+    }));
+    const completedEntries = completedQuests.map((quest) => ({
+      ...quest,
+      isCompleted: true,
+      fromCompletedList: true,
+    }));
+    return [...activeEntries, ...completedEntries];
+  }, [activeQuests, completedQuests]);
 
   const isQuestDialogAvailable = useCallback(
     (npcId: string, dialog: NpcDialog) => {
@@ -1938,7 +1984,7 @@ export const ExplorarPage = () => {
       setNpcInteractionState(null);
       setNpcConversationState(null);
       cancelTracking();
-      await refreshActiveNpcs();
+      await refreshActiveNpcs(nextMap.id);
       await refreshQuestState();
       setErrorMessage(null);
     } catch (error) {
@@ -2008,7 +2054,7 @@ export const ExplorarPage = () => {
           });
         }
 
-        await Promise.all([refreshActiveNpcs(), refreshQuestState()]);
+        await Promise.all([refreshActiveNpcs(active.map.id), refreshQuestState()]);
         setErrorMessage(null);
       } catch (error) {
         if (!mounted) return;
@@ -4200,11 +4246,18 @@ export const ExplorarPage = () => {
                 "absolute inset-0 animate-pulse",
                 evolutionVfx.tone === "evolved"
                   ? "bg-[radial-gradient(circle_at_center,rgba(34,211,238,0.26)_0%,rgba(34,211,238,0.09)_40%,rgba(2,6,23,0.65)_100%)]"
-                  : "bg-[radial-gradient(circle_at_center,rgba(251,191,36,0.26)_0%,rgba(251,191,36,0.09)_40%,rgba(2,6,23,0.65)_100%)]",
+                  : evolutionVfx.tone === "swapped"
+                    ? "bg-[radial-gradient(circle_at_center,rgba(96,165,250,0.26)_0%,rgba(96,165,250,0.09)_40%,rgba(2,6,23,0.65)_100%)]"
+                    : "bg-[radial-gradient(circle_at_center,rgba(251,191,36,0.26)_0%,rgba(251,191,36,0.09)_40%,rgba(2,6,23,0.65)_100%)]",
               )}
             />
             <div className="absolute h-52 w-52 rounded-full border border-white/20 animate-ping" />
-            <div className={cn("absolute h-72 w-72 rounded-full border animate-pulse", evolutionVfx.tone === "evolved" ? "border-cyan-300/30" : "border-amber-300/30")} />
+            <div
+              className={cn(
+                "absolute h-72 w-72 rounded-full border animate-pulse",
+                evolutionVfx.tone === "evolved" ? "border-cyan-300/30" : evolutionVfx.tone === "swapped" ? "border-blue-300/30" : "border-amber-300/30",
+              )}
+            />
           </div>
         ) : null}
         <FloatingBagMenu embedded focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} />
@@ -4365,36 +4418,49 @@ export const ExplorarPage = () => {
               </button>
               <Badge className="border-slate-300/20 bg-slate-800/70 text-slate-200 hover:bg-slate-800/70">{activeQuests.length}/3</Badge>
             </div>
-              {questLoading ? <p className="px-1 text-[11px] text-slate-400">Atualizando...</p> : null}
-              {activeQuests.length === 0 ? <p className="px-1 text-[11px] text-slate-400">Nenhuma quest ativa.</p> : null}
-              <div className="space-y-1.5">
-                {activeQuests.map((quest) => {
-                  const totalObjectives = Math.max(1, quest.objectives.length);
-                  const completedObjectives = quest.objectives.filter((objective) => objective.completed).length;
-                  return (
-                    <button
-                      key={quest.id}
-                      type="button"
-                      className="w-full rounded-lg border border-slate-300/15 bg-slate-900/40 px-2 py-2 text-left transition hover:bg-slate-900/62"
-                      onClick={() => setQuestDetail(quest)}
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <p className="truncate text-[11px] font-semibold text-slate-100">{quest.title}</p>
-                        <span className={`text-[10px] font-semibold ${quest.turnInReady ? "text-emerald-300" : "text-slate-400"}`}>
-                          {quest.turnInReady ? "Pronta" : `${completedObjectives}/${totalObjectives}`}
-                        </span>
-                      </div>
-                      <div className="space-y-1">
+            {questLoading ? <p className="px-1 text-[11px] text-slate-400">Atualizando...</p> : null}
+            {questHudEntries.length === 0 ? <p className="px-1 text-[11px] text-slate-400">Nenhuma quest.</p> : null}
+            <div className="space-y-1.5">
+              {questHudEntries.map((quest, index) => {
+                const completedObjectives = quest.objectives.filter((objective) => objective.completed).length;
+                const isCompleted = quest.isCompleted;
+                return (
+                  <div key={`${quest.id}-${quest.fromCompletedList ? "done" : "active"}`} className="rounded-md px-1 py-1 text-left">
+                    <details open={!isCompleted}>
+                      <summary className="list-none cursor-pointer">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={cn("truncate text-[11px] font-semibold text-slate-100", isCompleted ? "line-through text-slate-400" : undefined)}>
+                            {quest.title}
+                          </p>
+                          {isCompleted ? (
+                            <span className="text-[10px] font-semibold text-emerald-400">✓ completo</span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">{completedObjectives}/{Math.max(1, quest.objectives.length)}</span>
+                          )}
+                        </div>
+                      </summary>
+                      <div className="mt-1 space-y-1">
+                        <p
+                          className={cn("text-[11px] leading-snug text-slate-300", isCompleted ? "line-through text-slate-500" : undefined)}
+                          title={quest.description}
+                        >
+                          {truncateQuestDescription(quest.description)}
+                        </p>
                         {quest.objectives.map((objective) => (
-                          <p key={objective.id} className={`text-[11px] leading-snug ${objective.completed ? "text-emerald-200" : "text-slate-300"}`}>
-                            {getQuestObjectiveLabel(objective)} {objective.current}/{objective.required}
+                          <p
+                            key={objective.id}
+                            className={cn("text-[11px] leading-snug text-slate-300", objective.completed ? "line-through text-slate-500" : undefined)}
+                          >
+                            - {getQuestObjectiveLabel(objective)} {objective.current}/{objective.required}
                           </p>
                         ))}
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
+                    </details>
+                    {index < questHudEntries.length - 1 ? <div className="mt-2 border-b border-slate-200/15" /> : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -4730,52 +4796,6 @@ export const ExplorarPage = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={Boolean(questDetail)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setQuestDetail(null);
-          }
-        }}
-      >
-        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl border-slate-200/20 bg-gradient-to-br from-slate-950/96 via-slate-900/94 to-slate-950/96 text-slate-100 backdrop-blur-xl sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="text-slate-100">{questDetail?.title ?? "Quest"}</DialogTitle>
-            <DialogDescription className="text-slate-300">{questDetail?.description ?? ""}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            {questDetail?.objectives.map((objective) => (
-              <div key={objective.id} className="rounded-md border border-slate-200/20 bg-slate-900/45 p-2 text-xs text-slate-200">
-                <p>{getQuestObjectiveLabel(objective)}</p>
-                <p className="text-slate-400">
-                  Progresso: {objective.current}/{objective.required}
-                </p>
-              </div>
-            ))}
-            {!questDetail ? null : (
-              <div className="rounded-md border border-slate-200/20 bg-slate-900/45 p-2 text-xs text-slate-200">
-                <p>
-                  Recompensa: +{questDetail.rewardBits} Bits | +{questDetail.rewardXp} XP
-                </p>
-                {questDetail.rewardItems.length > 0 ? (
-                  <div className="mt-1 space-y-1 text-slate-400">
-                    {questDetail.rewardItems.map((reward) => (
-                      <p key={reward.id}>
-                        {reward.itemName ?? reward.itemId} x{reward.quantity}
-                      </p>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            )}
-            {!questDetail ? null : (
-              <p className="text-xs text-slate-400">
-                Status: {questDetail.status === "COMPLETED" ? "Concluida" : questDetail.turnInReady ? "Pronta para entrega" : "Em andamento"}
-              </p>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
     </section>
   );
 };
